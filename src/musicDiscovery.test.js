@@ -61,14 +61,14 @@ test('search surfaces HTTP and malformed-response errors', async (t) => {
   await assert.rejects(searchMusic('test'), /invalid response/);
 });
 
-test('song radio combines seed artist and genre with mood preferences', () => {
+test('song radio follows current-song metadata instead of mood or search history', () => {
   const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A', genre: 'Indian Pop' };
   const queries = relatedQueries(seed, 'calm', 'match', 'Hindi');
   assert.equal(queries[0], 'Artist A');
-  assert.equal(queries[1], 'Indian Pop Hindi acoustic');
-  assert.notDeepEqual(queries, relatedQueries(seed, 'happy', 'match', 'Hindi'));
-  assert.notDeepEqual(queries, relatedQueries(seed, 'calm', 'match', 'English'));
-  assert.ok(relatedQueries({ ...seed, genre: null }, 'calm', 'match', 'Surprise')[1].startsWith('Artist A '));
+  assert.equal(queries[1], 'Artist A Indian Pop');
+  assert.deepEqual(queries, relatedQueries(seed, 'happy', 'match', 'Hindi'));
+  assert.deepEqual(queries, relatedQueries(seed, 'calm', 'match', 'English'));
+  assert.deepEqual(relatedQueries({ ...seed, genre: null }), ['Artist A']);
 });
 
 test('song radio excludes the seed and alternate recordings, deduplicates, and retains genre', () => {
@@ -78,7 +78,7 @@ test('song radio excludes the seed and alternate recordings, deduplicates, and r
   });
   const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A' };
   const a = track(2, 'Other song', 'Artist A');
-  const b = track(3, 'Mood song', 'Artist B');
+  const b = track(3, 'Another song', 'Artist A');
   const songs = buildRelatedMix([
     [track(1, 'Seed', 'Artist A'), a, track(4, 'Seed (Acoustic)', 'Artist C')],
     [b, a, { trackId: 5, trackName: 'No preview' }],
@@ -86,6 +86,41 @@ test('song radio excludes the seed and alternate recordings, deduplicates, and r
   assert.deepEqual(new Set(songs.map((song) => song.id)), new Set(['itunes-2', 'itunes-3']));
   assert.ok(songs.every((song) => song.genre === 'Pop' && song.language === 'Global' && song.matchWhy.includes('Seed')));
   assert.deepEqual(buildRelatedMix([], seed, { mood: 'calm', intent: 'match' }), []);
+});
+
+test('Garba radio excludes unrelated songs, even by the same artist or broad genre', () => {
+  const seed = { id: 'itunes-1', title: 'Navratri Garba', artist: 'Singer', album: 'Garba Hits', genre: 'Indian Pop' };
+  const track = (id, title, album, artist = 'Singer') => ({
+    trackId: id, trackName: title, collectionName: album, artistName: artist,
+    primaryGenreName: 'Indian Pop', previewUrl: `https://example.com/${id}`,
+  });
+  assert.deepEqual(relatedQueries(seed), ['Singer garba dandiya', 'garba dandiya']);
+  const songs = buildRelatedMix([[
+    track(2, 'Love Song', 'Romantic Hits'),
+    track(3, 'Dholida', 'Nonstop Garba'),
+    track(4, 'Dandiya Nights', 'Dance', 'Another Singer'),
+    track(5, 'Bhajan', 'Devotional'),
+    track(6, 'ગરબો', 'Gujarati', 'Gujarati Singer'),
+  ]], seed, {});
+  assert.deepEqual(new Set(songs.map((song) => song.id)), new Set(['itunes-3', 'itunes-4', 'itunes-6']));
+  assert.ok(songs.every((song) => song.matchWhy.includes('Garba / Dandiya')));
+  assert.deepEqual(buildRelatedMix([[track(2, 'Love Song', 'Romantic Hits')]], seed, {}), []);
+});
+
+test('generic radio requires a shared artist and matching genre when available', () => {
+  const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A & Artist B', genre: 'Pop' };
+  const track = (id, artist, genre) => ({
+    trackId: id, trackName: `Song ${id}`, artistName: artist, primaryGenreName: genre,
+    previewUrl: `https://example.com/${id}`,
+  });
+  const songs = buildRelatedMix([[
+    track(2, 'Artist A', 'Pop'),
+    track(3, 'Artist B, Artist C', 'Pop'),
+    track(4, 'Artist ABC', 'Pop'),
+    track(5, 'Artist A', 'Devotional'),
+    track(6, 'Unrelated Artist', 'Pop'),
+  ]], seed, {});
+  assert.deepEqual(songs.map((song) => song.id), ['itunes-2', 'itunes-3']);
 });
 
 test('visible upcoming queue matches playback order, wraps, and never repeats the current track', () => {

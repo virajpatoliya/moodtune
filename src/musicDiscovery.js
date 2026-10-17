@@ -73,21 +73,47 @@ export function buildDiscoveryMix(groups, preferences) {
   return [...firstPicks, ...moreFromArtists];
 }
 
-export function relatedQueries(song, mood, intent, language) {
-  const moodQuery = discoveryQueries(mood, intent, language)[0];
-  return [...new Set([
-    song.artist,
-    `${song.genre || song.artist} ${moodQuery}`,
-  ])];
+const RADIO_STYLES = [
+  { label: 'Garba / Dandiya', query: 'garba dandiya', pattern: /garba|garbo|garbe|dandiya|navratri|નવરાત્રી|ગરબા|ગરબો|डांडिया|गरबा/i },
+  { label: 'Bhajan', query: 'bhajan', pattern: /bhajan|ભજન|भजन/i },
+  { label: 'Qawwali', query: 'qawwali', pattern: /qawwali|kawwali|कव्वाली/i },
+  { label: 'Ghazal', query: 'ghazal', pattern: /ghazal|gazal|ગઝલ|ग़ज़ल|गजल/i },
+  { label: 'Lo-fi', query: 'lofi', pattern: /\blo[\s-]?fi\b/i },
+];
+
+function radioStyle(song) {
+  const metadata = `${song.title} ${song.album || ''} ${song.genre || ''}`;
+  return RADIO_STYLES.find((style) => style.pattern.test(metadata));
+}
+
+function artistNames(artist) {
+  return artist.toLowerCase().split(/\s*(?:,|&| feat\.? | featuring | and | x )\s*/).map((name) => name.trim()).filter(Boolean);
+}
+
+export function relatedQueries(song) {
+  const style = radioStyle(song);
+  if (style) return [`${song.artist} ${style.query}`, style.query];
+  return [...new Set([song.artist, `${song.artist} ${song.genre || song.album || ''}`.trim()])];
 }
 
 export function buildRelatedMix(groups, seed, preferences) {
   const seedTitle = seed.title.trim().toLowerCase().replace(/\s*\([^)]*\)/g, '').trim();
+  const style = radioStyle(seed);
+  const seedArtists = artistNames(seed.artist);
+  const genre = seed.genre?.toLowerCase();
   return buildDiscoveryMix(groups, { ...preferences, language: 'Global' })
     .filter((song) => song.id !== seed.id && song.title.toLowerCase().replace(/\s*\([^)]*\)/g, '').trim() !== seedTitle)
+    .filter((song) => {
+      if (style) return radioStyle(song)?.label === style.label;
+      const sameArtist = seedArtists.some((artist) => artist !== 'unknown artist' && artistNames(song.artist).includes(artist));
+      const sameGenre = genre && song.genre?.toLowerCase() === genre;
+      return sameArtist && (!genre || sameGenre);
+    })
     .map((song) => ({
       ...song,
-      matchWhy: `Song radio inspired by ${seed.title}: artist and genre searches blended with your mood preference. Similarity and mood are suggestions, not audio analysis.`,
+      matchWhy: style
+        ? `${style.label} radio from "${seed.title}". Matched using song, album, or genre text; not verified audio analysis.`
+        : `Related to "${seed.title}" through a shared artist${genre ? ' and genre' : ''}. Metadata-based suggestions, not verified audio similarity.`,
     }));
 }
 

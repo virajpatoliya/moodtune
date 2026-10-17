@@ -604,6 +604,8 @@ export default function App() {
   const searchDialogRef = useRef(null);
   const searchReturnFocusRef = useRef(null);
   const waitingForRadioRef = useRef(false);
+  const playbackHistoryRef = useRef([]);
+  const radioPlayedRef = useRef(new Set());
   const playbackStateRef = useRef({ activeSong, dislikedSongIds });
   useEffect(() => { playbackStateRef.current = { activeSong, dislikedSongIds }; }, [activeSong, dislikedSongIds]);
   const discoveryLanguage = activeLangFilter === 'All' ? currentLanguage : activeLangFilter;
@@ -613,7 +615,7 @@ export default function App() {
     () => discovery.key === discoveryKey ? discovery.songs : [],
     [discovery, discoveryKey]
   );
-  const radioKey = `${radioSeed?.id}:${currentMood}:${currentIntent}:${discoveryLanguage}:${radioRevision}`;
+  const radioKey = `${radioSeed?.id}:${radioRevision}`;
   const radioStatus = radio.key === radioKey ? radio.status : 'loading';
   const radioSongs = useMemo(() => radio.key === radioKey ? radio.songs : [], [radio, radioKey]);
   const songCatalog = useMemo(() => {
@@ -628,17 +630,21 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(new Error('Song radio timed out. Please retry.')), 15000);
     async function loadRadio() {
       try {
-        const queries = relatedQueries(radioSeed, currentMood, currentIntent, discoveryLanguage);
+        const queries = relatedQueries(radioSeed);
         const groups = await Promise.all(queries.map((query) => searchMusic(query, controller.signal)));
         if (cancelled) return;
-        const songs = buildRelatedMix(groups, radioSeed, { mood: currentMood, intent: currentIntent });
+        const songs = buildRelatedMix(groups, radioSeed, { mood: null, intent: null })
+          .filter((song) => !radioPlayedRef.current.has(song.id));
         setRadio({ key: radioKey, songs, status: 'ready', error: '' });
         if (waitingForRadioRef.current) {
           waitingForRadioRef.current = false;
           const latest = playbackStateRef.current;
           const next = songs.find((song) => song.id !== latest.activeSong?.id && !latest.dislikedSongIds.includes(song.id));
           if (next) {
+            if (latest.activeSong) playbackHistoryRef.current.push(latest.activeSong);
+            radioPlayedRef.current.add(next.id);
             setActiveSong(next);
+            setRadioSeed(next);
             setProgressSec(0);
             setIsPlaying(true);
           }
@@ -654,7 +660,7 @@ export default function App() {
     }
     loadRadio();
     return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
-  }, [radioSeed, currentMood, currentIntent, discoveryLanguage, radioKey]);
+  }, [radioSeed, radioKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -887,12 +893,15 @@ export default function App() {
     }
   }, [searchHistory.terms, searchQuery]);
 
-  const handleSelectSong = (song, playImmediately = true, { keepSearchOpen = false, openPlayer = false, seedRadio = false, preserveRadio = false, toggle = true } = {}) => {
+  const handleSelectSong = (song, playImmediately = true, { keepSearchOpen = false, openPlayer = false, preserveRadio = false, toggle = true, goingBack = false } = {}) => {
     waitingForRadioRef.current = false;
     if (!keepSearchOpen) setScreen('home');
-    if (seedRadio) {
-      if (radioSeed?.id !== song.id) setRadioSeed(song);
-    } else if (!preserveRadio) setRadioSeed(null);
+    if (activeSong?.id !== song.id) {
+      if (!preserveRadio) radioPlayedRef.current = new Set();
+      radioPlayedRef.current.add(song.id);
+      if (activeSong && !goingBack) playbackHistoryRef.current.push(activeSong);
+    }
+    if (radioSeed?.id !== song.id) setRadioSeed(song);
     if (openPlayer) setIsFullPlayerOpen(true);
     if (!keepSearchOpen) setIsSearchOpen(false);
     setSavedSongs((prev) => prev.some((entry) => entry.id === song.id) ? prev : [...prev, song]);
@@ -924,6 +933,8 @@ export default function App() {
     setIsPlayerVisible(true);
     if (!activeSong && recommendations.spotlight) {
       setActiveSong(recommendations.spotlight);
+      setRadioSeed(recommendations.spotlight);
+      radioPlayedRef.current = new Set([recommendations.spotlight.id]);
     }
     setIsPlaying((prev) => !prev);
   };
@@ -971,11 +982,13 @@ export default function App() {
       if (audioRef.current) audioRef.current.currentTime = 0;
       return;
     }
-    const list = playbackTracks;
-    if (list.length === 0 || !currentSong) return;
-    const currentIndex = list.findIndex((s) => s.id === currentSong.id);
-    const prevTrack = list[currentIndex <= 0 ? list.length - 1 : currentIndex - 1];
-    handleSelectSong(prevTrack, true, { preserveRadio: true, toggle: false, keepSearchOpen: isSearchOpen });
+    const previous = playbackHistoryRef.current.pop();
+    if (!previous) {
+      if (audioRef.current) audioRef.current.currentTime = 0;
+      setProgressSec(0);
+      return;
+    }
+    handleSelectSong(previous, true, { preserveRadio: true, toggle: false, keepSearchOpen: isSearchOpen, goingBack: true });
   };
 
   const handleToggleLike = (songId, e) => {
@@ -1282,19 +1295,19 @@ export default function App() {
                 {liveSearchResults.map((song) => (
                   <div
                     key={song.id}
-                    onClick={() => handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false })}
+                    onClick={() => handleSelectSong(song, true, { openPlayer: true, toggle: false })}
                     className={`search-result flex items-center rounded-2xl border transition ${currentSong?.id === song.id ? 'bg-violet-500/20 border-violet-400/40' : 'bg-white/[0.03] border-white/5 hover:border-violet-400/30'}`}
                   >
                     <button
                       aria-label={`${currentSong?.id === song.id && isPlaying ? 'Pause' : 'Play'} preview of ${song.title} by ${song.artist}`}
-                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { keepSearchOpen: true, seedRadio: true }); }}
+                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { keepSearchOpen: true }); }}
                       className="search-preview-button"
                     >
                       {currentSong?.id === song.id && isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
                     </button>
                     <button
                       aria-label={`Open player for ${song.title} by ${song.artist}`}
-                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false }); }}
+                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { openPlayer: true, toggle: false }); }}
                       className="flex flex-1 items-center gap-3 min-w-0 text-left py-3 pr-3 group"
                     >
                       <SongCoverArt
@@ -1393,8 +1406,8 @@ export default function App() {
             </div>
             <TasteSuggestions
               history={searchHistory.terms} currentSongId={currentSong?.id} isPlaying={isPlaying}
-              onPreview={(song) => handleSelectSong(song, true, { keepSearchOpen: true, seedRadio: true })}
-              onOpen={(song) => handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false })}
+              onPreview={(song) => handleSelectSong(song, true, { keepSearchOpen: true })}
+              onOpen={(song) => handleSelectSong(song, true, { openPlayer: true, toggle: false })}
               onClear={clearSearchHistory}
             />
               <div className="border-t border-white/10 pt-8">
@@ -2315,10 +2328,10 @@ export default function App() {
                     <span className="text-xs text-slate-400">{radioSeed ? 'Autoplay' : 'Dynamically adapting'}</span>
                   </div>
                   {radioSeed && <>
-                    <p className="text-xs text-slate-400">Artist and genre discovery, guided by your mood. Suggestions, not verified audio similarity.</p>
+                    <p className="text-xs text-slate-400">Based on the playing song&apos;s style and artist, not search history. Metadata-based suggestions, not audio analysis.</p>
                     {radioStatus === 'loading' && <p role="status" className="text-xs text-violet-200">Finding similar songs for autoplay...</p>}
                     {radioStatus === 'error' && <div role="alert" className="text-sm text-rose-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry song radio</button></div>}
-                    {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No related previews found. Try another song or mood.</p>}
+                    {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No more related previews found. Autoplay won&apos;t switch to unrelated songs. Choose another song to continue.</p>}
                   </>}
 
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
