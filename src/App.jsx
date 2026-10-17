@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { buildDiscoveryMix, discoveryQueries, normalizeTracks, searchMusic } from './musicDiscovery';
+import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery';
 import './App.css';
+import TasteSuggestions from './TasteSuggestions.jsx';
+import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
 import {
   Play,
   Pause,
@@ -563,10 +565,20 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchRevision, setSearchRevision] = useState(0);
-  const [recentSearches, setRecentSearches] = useState([]);
+  const [searchHistory, setSearchHistory] = useState(() => {
+    try {
+      return { terms: readSearchHistory(window.localStorage), error: '' };
+    } catch (error) {
+      console.error('Unable to read search history.', error);
+      return { terms: [], error: 'Search history could not be read on this device. You can still search or try clearing history.' };
+    }
+  });
   const [discovery, setDiscovery] = useState({ key: '', songs: [], status: 'loading', error: '' });
   const [discoveryRevision, setDiscoveryRevision] = useState(0);
   const [savedSongs, setSavedSongs] = useState([]);
+  const [radioSeed, setRadioSeed] = useState(null);
+  const [radio, setRadio] = useState({ key: '', songs: [], status: 'loading', error: '' });
+  const [radioRevision, setRadioRevision] = useState(0);
 
   const [likedSongIds, setLikedSongIds] = useState([]);
   const [dislikedSongIds, setDislikedSongIds] = useState([]);
@@ -590,6 +602,10 @@ export default function App() {
   const toastTimeoutRef = useRef(null);
   const searchInputRef = useRef(null);
   const searchDialogRef = useRef(null);
+  const searchReturnFocusRef = useRef(null);
+  const waitingForRadioRef = useRef(false);
+  const playbackStateRef = useRef({ activeSong, dislikedSongIds });
+  useEffect(() => { playbackStateRef.current = { activeSong, dislikedSongIds }; }, [activeSong, dislikedSongIds]);
   const discoveryLanguage = activeLangFilter === 'All' ? currentLanguage : activeLangFilter;
   const discoveryKey = `${currentMood}:${currentIntent}:${discoveryLanguage}:${discoveryRevision}`;
   const discoveryStatus = discovery.key === discoveryKey ? discovery.status : 'loading';
@@ -597,10 +613,48 @@ export default function App() {
     () => discovery.key === discoveryKey ? discovery.songs : [],
     [discovery, discoveryKey]
   );
+  const radioKey = `${radioSeed?.id}:${currentMood}:${currentIntent}:${discoveryLanguage}:${radioRevision}`;
+  const radioStatus = radio.key === radioKey ? radio.status : 'loading';
+  const radioSongs = useMemo(() => radio.key === radioKey ? radio.songs : [], [radio, radioKey]);
   const songCatalog = useMemo(() => {
-    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...liveSearchResults].map((song) => [song.id, song]));
+    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...radioSongs, ...liveSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
     return [...songs.values()];
-  }, [savedSongs, discoveredSongs, liveSearchResults]);
+  }, [savedSongs, discoveredSongs, radioSongs, liveSearchResults, activeSong]);
+
+  useEffect(() => {
+    if (!radioSeed) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const timeout = setTimeout(() => controller.abort(new Error('Song radio timed out. Please retry.')), 15000);
+    async function loadRadio() {
+      try {
+        const queries = relatedQueries(radioSeed, currentMood, currentIntent, discoveryLanguage);
+        const groups = await Promise.all(queries.map((query) => searchMusic(query, controller.signal)));
+        if (cancelled) return;
+        const songs = buildRelatedMix(groups, radioSeed, { mood: currentMood, intent: currentIntent });
+        setRadio({ key: radioKey, songs, status: 'ready', error: '' });
+        if (waitingForRadioRef.current) {
+          waitingForRadioRef.current = false;
+          const latest = playbackStateRef.current;
+          const next = songs.find((song) => song.id !== latest.activeSong?.id && !latest.dislikedSongIds.includes(song.id));
+          if (next) {
+            setActiveSong(next);
+            setProgressSec(0);
+            setIsPlaying(true);
+          }
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Song radio failed.', error);
+        waitingForRadioRef.current = false;
+        setRadio({ key: radioKey, songs: [], status: 'error', error: error.message });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    loadRadio();
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+  }, [radioSeed, currentMood, currentIntent, discoveryLanguage, radioKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -666,12 +720,11 @@ export default function App() {
 
   useEffect(() => {
     if (!isSearchOpen) return;
-    const previousFocus = document.activeElement;
+    const previousFocus = searchReturnFocusRef.current || document.activeElement;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     searchInputRef.current?.focus();
     function onKeyDown(event) {
-      if (event.key === 'Escape') setIsSearchOpen(false);
       if (event.key !== 'Tab') return;
       const elements = [...searchDialogRef.current.querySelectorAll('button, input')].filter((el) => !el.disabled);
       const first = elements[0];
@@ -787,11 +840,16 @@ export default function App() {
     };
   }, [activeSong, recommendations.spotlight, resolvedMedia]);
 
+  const playbackTracks = useMemo(() => radioSeed
+    ? [radioSeed, ...radioSongs].filter((song) => !dislikedSongIds.includes(song.id))
+    : recommendations.allScored,
+  [radioSeed, radioSongs, dislikedSongIds, recommendations.allScored]);
+
   const queueList = useMemo(() => {
     if (!currentSong) return recommendations.madeForMood;
-    const others = recommendations.allScored.filter((s) => s.id !== currentSong.id).slice(0, 7);
+    const others = upcomingTracks(playbackTracks, currentSong.id).slice(0, 7);
     return [currentSong, ...others];
-  }, [currentSong, recommendations]);
+  }, [currentSong, recommendations, playbackTracks]);
 
   const songUrl = currentSong?.resolvedAudioUrl;
   const currentSongId = currentSong?.id;
@@ -817,15 +875,33 @@ export default function App() {
     }
   }, [songUrl, currentSongId, activeSong, isPlaying, isMuted, handlePlaybackError]);
 
-  const handleSelectSong = (song, playImmediately = true) => {
-    setScreen('home');
+  const rememberSearch = useCallback(() => {
+    if (!searchQuery.trim()) return;
+    const terms = addSearchTerm(searchHistory.terms, searchQuery);
+    try {
+      window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(terms));
+      setSearchHistory({ terms, error: '' });
+    } catch (error) {
+      console.error('Unable to save search history.', error);
+      setSearchHistory({ terms, error: 'Search history is available for this visit, but could not be saved on this device.' });
+    }
+  }, [searchHistory.terms, searchQuery]);
+
+  const handleSelectSong = (song, playImmediately = true, { keepSearchOpen = false, openPlayer = false, seedRadio = false, preserveRadio = false, toggle = true } = {}) => {
+    waitingForRadioRef.current = false;
+    if (!keepSearchOpen) setScreen('home');
+    if (seedRadio) {
+      if (radioSeed?.id !== song.id) setRadioSeed(song);
+    } else if (!preserveRadio) setRadioSeed(null);
+    if (openPlayer) setIsFullPlayerOpen(true);
+    if (!keepSearchOpen) setIsSearchOpen(false);
     setSavedSongs((prev) => prev.some((entry) => entry.id === song.id) ? prev : [...prev, song]);
     if (isSearchOpen && searchQuery.trim()) {
-      setRecentSearches((prev) => [searchQuery.trim(), ...prev.filter((term) => term !== searchQuery.trim())].slice(0, 5));
+      rememberSearch();
     }
     setIsPlayerVisible(true);
     if (activeSong?.id === song.id) {
-      if (playImmediately) setIsPlaying((prev) => !prev);
+      if (playImmediately) setIsPlaying((prev) => toggle ? !prev : true);
       return;
     }
     setActiveSong(song);
@@ -837,12 +913,13 @@ export default function App() {
     if (playImmediately) {
       setIsPlaying(true);
     }
-    if (isSearchOpen) {
+    if (isSearchOpen && !keepSearchOpen) {
       setIsSearchOpen(false);
     }
   };
 
   const handleTogglePlay = () => {
+    waitingForRadioRef.current = false;
     if (!activeSong && !recommendations.spotlight) return;
     setIsPlayerVisible(true);
     if (!activeSong && recommendations.spotlight) {
@@ -853,24 +930,39 @@ export default function App() {
 
   const handleNextSong = (isUserSkip = true) => {
     if (!currentSong) return;
+    if (radioSeed && radioStatus !== 'ready') {
+      setIsPlaying(false);
+      waitingForRadioRef.current = radioStatus === 'loading';
+      triggerToast(radioStatus === 'loading'
+        ? 'Finding similar songs. Autoplay will continue when ready.'
+        : 'Song radio is unavailable. Open the player to retry.');
+      return;
+    }
     if (isUserSkip && progressSec < 15) {
       setSkippedSongIds((prev) => (prev.includes(currentSong.id) ? prev : [...prev, currentSong.id]));
       triggerToast(`Skipped "${currentSong.title}" • Adapting recommendations`);
     }
 
-    const list = recommendations.allScored;
-    if (list.length === 0) return;
-
-    if (isShuffle) {
-      const candidates = list.filter((s) => s.id !== currentSong.id);
-      const randomSong = candidates[Math.floor(Math.random() * candidates.length)] || list[0];
-      handleSelectSong(randomSong, true);
+    const list = playbackTracks;
+    const candidates = upcomingTracks(list, currentSong.id);
+    if (candidates.length === 0) {
+      setIsPlaying(false);
+      if (radioSeed && radioStatus === 'loading') {
+        waitingForRadioRef.current = true;
+        triggerToast('Finding similar songs. Autoplay will continue when ready.');
+      } else {
+        triggerToast('No next preview available. Open the player to retry song radio or choose another song.');
+      }
       return;
     }
 
-    const currentIndex = list.findIndex((s) => s.id === currentSong.id);
-    const nextTrack = list[(currentIndex + 1) % list.length];
-    handleSelectSong(nextTrack, true);
+    if (isShuffle) {
+      const randomSong = candidates[Math.floor(Math.random() * candidates.length)];
+      handleSelectSong(randomSong, true, { preserveRadio: true, toggle: false, keepSearchOpen: isSearchOpen });
+      return;
+    }
+
+    handleSelectSong(candidates[0], true, { preserveRadio: true, toggle: false, keepSearchOpen: isSearchOpen });
   };
 
   const handlePrevSong = () => {
@@ -879,11 +971,11 @@ export default function App() {
       if (audioRef.current) audioRef.current.currentTime = 0;
       return;
     }
-    const list = recommendations.allScored;
+    const list = playbackTracks;
     if (list.length === 0 || !currentSong) return;
     const currentIndex = list.findIndex((s) => s.id === currentSong.id);
-    const prevTrack = list[(currentIndex - 1 + list.length) % list.length];
-    handleSelectSong(prevTrack, true);
+    const prevTrack = list[currentIndex <= 0 ? list.length - 1 : currentIndex - 1];
+    handleSelectSong(prevTrack, true, { preserveRadio: true, toggle: false, keepSearchOpen: isSearchOpen });
   };
 
   const handleToggleLike = (songId, e) => {
@@ -926,6 +1018,7 @@ export default function App() {
   };
 
   const handleStopAndClosePlayer = (e) => {
+    waitingForRadioRef.current = false;
     if (e) e.stopPropagation();
     setIsPlaying(false);
     setIsFullPlayerOpen(false);
@@ -954,6 +1047,28 @@ export default function App() {
     setLiveSearchResults([]);
     setSearchError('');
     setIsSearching(Boolean(query.trim()));
+  };
+
+  const closeSearch = () => {
+    rememberSearch();
+    setIsSearchOpen(false);
+  };
+
+  const clearSearchHistory = () => {
+    try {
+      window.localStorage.removeItem(SEARCH_HISTORY_KEY);
+      setSearchHistory({ terms: [], error: '' });
+      triggerToast('Search history cleared from this device.');
+    } catch (error) {
+      console.error('Unable to clear search history.', error);
+      setSearchHistory((previous) => ({ ...previous, error: 'Search history could not be cleared. Check your browser storage settings and try again.' }));
+    }
+  };
+
+  const openSearch = () => {
+    searchReturnFocusRef.current = document.activeElement;
+    updateSearch('');
+    setIsSearchOpen(true);
   };
 
   const finishQuizWithLang = (langChoice) => {
@@ -1036,19 +1151,6 @@ export default function App() {
         </button>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => {
-              setIsSearchOpen(true);
-              setTimeout(() => searchInputRef.current?.focus(), 100);
-            }}
-            className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-white transition shadow-sm text-xs font-medium"
-            title="Search any song or artist"
-          >
-            <Search className="w-3.5 h-3.5 text-amber-300" />
-            <span className="hidden sm:inline">Search Songs & Artists</span>
-            <span className="sm:hidden">Search</span>
-          </button>
-
           {screen !== 'home' && (
             <button
               onClick={handleSkipDirectlyToSongs}
@@ -1096,15 +1198,15 @@ export default function App() {
       )}
 
       {isSearchOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xl flex items-start justify-center pt-6 sm:pt-16 px-3 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) setIsSearchOpen(false); }}>
-          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" className="search-studio border border-white/15 rounded-3xl max-w-2xl w-full p-5 sm:p-7 shadow-2xl space-y-5 max-h-[88dvh] overflow-y-auto">
+        <div className="search-overlay fixed inset-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
+          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl space-y-4 overflow-y-auto">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] tracking-[0.25em] uppercase text-violet-300 font-bold mb-2">The discovery studio</p>
-                <h2 id="search-title" className="text-2xl sm:text-3xl font-black tracking-tight">Find your next obsession.</h2>
-                <p className="text-xs text-slate-400 mt-2">Songs, artists, little escapes. Find a track and try a preview.</p>
+                <h2 id="search-title" className="text-xl sm:text-3xl font-black tracking-tight">Find your next song.</h2>
+                <p className="text-xs text-slate-400 mt-2">Left button to preview. Tap a song to open its player and song radio.</p>
               </div>
-              <button aria-label="Close search" onClick={() => setIsSearchOpen(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/15"><X className="w-5 h-5" /></button>
+              <button aria-label="Close search" onClick={closeSearch} className="search-touch-button rounded-full bg-white/5 hover:bg-white/15"><X className="w-5 h-5" /></button>
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
               <div className="flex items-center gap-3 flex-1">
@@ -1115,8 +1217,9 @@ export default function App() {
                   aria-label="Search songs or artists"
                   value={searchQuery}
                   onChange={(e) => updateSearch(e.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) rememberSearch(); }}
                   placeholder="What do you want to hear?"
-                  className="w-full bg-transparent py-3 text-sm sm:text-base text-white placeholder-slate-400 focus:outline-none"
+                  className="min-w-0 w-full bg-transparent py-3 text-base text-white placeholder-slate-400 focus:outline-none"
                 />
               </div>
               <button
@@ -1125,12 +1228,15 @@ export default function App() {
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white"
+                className="search-touch-button rounded-full hover:bg-white/10 text-slate-400 hover:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {searchHistory.error && <div role="alert" className="text-xs text-amber-200 rounded-xl border border-amber-300/20 p-3">
+              <p>{searchHistory.error}</p><button onClick={clearSearchHistory} className="underline mt-2">Clear history</button>
+            </div>}
             {!searchQuery.trim() && (
               <div className="space-y-5 py-2">
                 <div className="rounded-2xl bg-gradient-to-r from-violet-500/15 to-rose-500/10 p-4 border border-violet-400/20">
@@ -1139,9 +1245,13 @@ export default function App() {
                     Explore {moodProfile.vibeTag} <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
-                {recentSearches.length > 0 && <div>
-                  <p className="text-[11px] uppercase tracking-widest text-slate-400 mb-2">Recently explored</p>
-                  <div className="flex flex-wrap gap-2">{recentSearches.map((term) => <button key={term} onClick={() => updateSearch(term)} className="search-chip"><Clock className="w-3 h-3" />{term}</button>)}</div>
+                {searchHistory.terms.length > 0 && <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="text-[11px] uppercase tracking-widest text-slate-400">Recent searches</p>
+                    <button onClick={clearSearchHistory} className="text-xs text-violet-200 min-h-11 px-2">Clear history</button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mb-3">Last 10 searches. Saved only in this browser on this device.</p>
+                  <div className="flex flex-wrap gap-2">{searchHistory.terms.map((term) => <button key={term} onClick={() => updateSearch(term)} className="search-chip max-w-full"><Clock className="w-3 h-3 shrink-0" /><span className="truncate">{term}</span></button>)}</div>
                 </div>}
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Try a favorite</span>
                 <div className="flex flex-wrap gap-2">
@@ -1168,15 +1278,25 @@ export default function App() {
                 <p>{searchError}</p><button className="search-chip mt-3" onClick={() => { setIsSearching(true); setSearchRevision((value) => value + 1); }}>Try again</button>
               </div>
             ) : searchQuery.trim() && liveSearchResults.length > 0 ? (
-              <div className="space-y-2 max-h-[45dvh] overflow-y-auto pr-1">
+              <div className="space-y-2">
                 {liveSearchResults.map((song) => (
-                  <button
+                  <div
                     key={song.id}
-                    aria-label={`Play preview of ${song.title} by ${song.artist}`}
-                    onClick={() => handleSelectSong(song, true)}
-                    className="w-full text-left p-3 rounded-2xl bg-white/[0.03] hover:bg-violet-500/15 border border-white/5 hover:border-violet-400/30 flex items-center justify-between gap-3 cursor-pointer transition group"
+                    onClick={() => handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false })}
+                    className={`search-result flex items-center rounded-2xl border transition ${currentSong?.id === song.id ? 'bg-violet-500/20 border-violet-400/40' : 'bg-white/[0.03] border-white/5 hover:border-violet-400/30'}`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      aria-label={`${currentSong?.id === song.id && isPlaying ? 'Pause' : 'Play'} preview of ${song.title} by ${song.artist}`}
+                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { keepSearchOpen: true, seedRadio: true }); }}
+                      className="search-preview-button"
+                    >
+                      {currentSong?.id === song.id && isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+                    </button>
+                    <button
+                      aria-label={`Open player for ${song.title} by ${song.artist}`}
+                      onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false }); }}
+                      className="flex flex-1 items-center gap-3 min-w-0 text-left py-3 pr-3 group"
+                    >
                       <SongCoverArt
                         song={song}
                         realCoverUrl={song.realCoverUrl || resolvedMedia[song.id]?.artworkUrl}
@@ -1187,13 +1307,12 @@ export default function App() {
                         <h4 className="text-sm font-semibold text-white truncate group-hover:text-amber-300 transition">
                           {song.title}
                         </h4>
-                        <p className="text-xs text-slate-400 truncate">{song.artist} • {song.language}</p>
+                        <p className="text-xs text-slate-400 truncate">{song.artist}</p>
+                        <span className="text-[10px] text-violet-300">{currentSong?.id === song.id && isPlaying ? 'Preview playing' : 'Open player & similar songs'}</span>
                       </div>
-                    </div>
-                    <span className="w-9 h-9 rounded-full bg-violet-400 text-slate-950 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition shadow">
-                      <Play className="w-4 h-4 fill-current ml-0.5" />
-                    </span>
-                  </button>
+                      <ChevronRight className="w-4 h-4 shrink-0 text-slate-400 ml-auto" />
+                    </button>
+                  </div>
                 ))}
               </div>
             ) : searchQuery.trim() ? (
@@ -1203,7 +1322,16 @@ export default function App() {
         </div>
       )}
 
-      <div className="w-full max-w-6xl px-4 sm:px-6 pb-36 pt-2 z-10 flex-1 flex flex-col items-center">
+      {!isMoodModalOpen && <button
+        hidden={isSearchOpen}
+        className={`floating-search ${(screen === 'home' || activeSong) && currentSong && isPlayerVisible && !isFullPlayerOpen ? 'floating-search-with-player' : ''}`}
+        onClick={openSearch} aria-label="Search songs or artists from anywhere">
+        <span className="floating-search-icon"><Search className="w-5 h-5" /></span>
+        <span className="flex-1 text-left">Search any song or artist</span>
+        <span className="text-[10px] text-violet-200">Discover <ArrowRight className="w-3 h-3 inline" /></span>
+      </button>}
+
+      <div className="w-full max-w-6xl px-4 sm:px-6 pb-56 pt-2 z-10 flex-1 flex flex-col items-center">
         {screen === 'welcome' && (
           <div className="w-full py-8 sm:py-14 space-y-10">
             <div className="welcome-stage relative grid lg:grid-cols-[1.2fr_1fr] gap-8 items-center">
@@ -1263,6 +1391,12 @@ export default function App() {
               <div className="sound-bars">{[22, 38, 16, 48, 30, 56, 20, 44, 28, 40, 18, 32].map((height, index) => <i key={index} style={{ height, animationDelay: `${index * 0.12}s` }} />)}</div>
             </div>
             </div>
+            <TasteSuggestions
+              history={searchHistory.terms} currentSongId={currentSong?.id} isPlaying={isPlaying}
+              onPreview={(song) => handleSelectSong(song, true, { keepSearchOpen: true, seedRadio: true })}
+              onOpen={(song) => handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false })}
+              onClear={clearSearchHistory}
+            />
               <div className="border-t border-white/10 pt-8">
                 <div className="flex flex-wrap justify-between gap-2 mb-5">
                   <div><p className="text-[10px] uppercase tracking-[0.25em] text-violet-300 mb-2">Start with a feeling</p><h2 className="text-2xl font-bold tracking-tight">What&apos;s your energy today?</h2></div>
@@ -1295,7 +1429,7 @@ export default function App() {
                 </div>
                   <div className="mt-6 flex flex-wrap items-center justify-between gap-3 p-5 rounded-2xl bg-white/[0.03] border border-white/10">
                     <div><p className="font-semibold">Already have a song in mind?</p><p className="text-xs text-slate-400 mt-1">Follow an artist, a lyric in your head, or a favorite sound.</p></div>
-                    <button onClick={() => setIsSearchOpen(true)} className="search-chip"><Search className="w-4 h-4" /> Open discovery studio <ArrowRight className="w-4 h-4" /></button>
+                    <button onClick={openSearch} className="search-chip"><Search className="w-4 h-4" /> Open discovery studio <ArrowRight className="w-4 h-4" /></button>
               </div>
             </div>
           </div>
@@ -1491,7 +1625,7 @@ export default function App() {
               <button onClick={() => setDiscoveryRevision((value) => value + 1)} className="search-chip" disabled={discoveryStatus === 'loading'}><RefreshCw className={`w-3.5 h-3.5 ${discoveryStatus === 'loading' ? 'animate-spin' : ''}`} /> Find a fresh mix</button>
             </div>
             <div
-              className={`relative overflow-hidden rounded-3xl bg-gradient-to-br ${moodProfile.gradient} border ${moodProfile.borderGlow} p-6 sm:p-8 shadow-2xl backdrop-blur-3xl transition-all duration-700`}
+              className={`mood-summary relative overflow-hidden rounded-3xl bg-gradient-to-br ${moodProfile.gradient} border ${moodProfile.borderGlow} p-5 sm:p-8 shadow-2xl backdrop-blur-3xl transition-all duration-700`}
             >
               <div
                 className="absolute -top-20 -right-20 w-80 h-80 rounded-full blur-3xl pointer-events-none opacity-60 transition-all duration-1000"
@@ -1501,7 +1635,7 @@ export default function App() {
               <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="space-y-3.5 max-w-2xl">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[11px] font-bold tracking-widest uppercase text-white/70 bg-white/10 px-3 py-1 rounded-full border border-white/10">
+                    <span className="hidden sm:inline text-[11px] font-bold tracking-widest uppercase text-white/70 bg-white/10 px-3 py-1 rounded-full border border-white/10">
                       {String(greetingTime)}
                     </span>
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/40 border border-white/15 text-xs font-semibold text-white">
@@ -1517,15 +1651,16 @@ export default function App() {
                   </div>
 
                   <div>
-                    <h1 className="text-2xl sm:text-4xl font-black text-white tracking-tight leading-tight">
+                    <h1 className="text-xl sm:text-4xl font-black text-white tracking-tight leading-tight">
                       {String(playlistTitle)}
                     </h1>
-                    <p className="text-xs sm:text-sm text-slate-200/90 leading-relaxed mt-1.5 max-w-xl">
+                    <p className="hidden sm:block text-sm text-slate-200/90 leading-relaxed mt-1.5 max-w-xl">
                       &ldquo;{String(friendlyExplanation)}&rdquo;
                     </p>
+                    <p className="sm:hidden text-xs text-slate-200/90 mt-2 leading-relaxed">Fresh previews for your mood. Press play and explore.</p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <div className="mood-summary-actions flex items-center gap-2 sm:gap-3 pt-1">
                     <button
                       onClick={() => {
                         if (isPlaying) {
@@ -1535,7 +1670,7 @@ export default function App() {
                         }
                       }}
                       disabled={!recommendations.spotlight}
-                      className="px-6 py-3 rounded-2xl bg-white text-slate-950 font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-2.5 hover:bg-amber-100 hover:scale-[1.02] active:scale-[0.98] transition"
+                      className="min-h-11 px-4 sm:px-6 py-3 rounded-2xl bg-white text-slate-950 font-extrabold text-xs sm:text-sm shadow-xl flex items-center justify-center gap-2 hover:bg-amber-100 hover:scale-[1.02] active:scale-[0.98] transition"
                     >
                       {isPlaying ? (
                         <>
@@ -1551,16 +1686,8 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => setIsSearchOpen(true)}
-                      className="px-4 py-3 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 transition"
-                    >
-                      <Search className="w-4 h-4 text-amber-300" />
-                      <span>Search Any Song</span>
-                    </button>
-
-                    <button
                       onClick={() => setIsMoodModalOpen(true)}
-                      className="px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-medium text-xs sm:text-sm flex items-center gap-2 transition"
+                      className="min-h-11 px-3 sm:px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition"
                     >
                       <Sliders className="w-4 h-4" />
                       <span>Change Mood</span>
@@ -1569,11 +1696,13 @@ export default function App() {
                 </div>
 
                 {recommendations.spotlight && (
-                  <div
+                  <button
+                    type="button"
+                    aria-label={`Play spotlight preview of ${recommendations.spotlight.title}`}
                     onClick={() => handleSelectSong(recommendations.spotlight, true)}
-                    className="flex-shrink-0 group relative cursor-pointer self-center lg:self-auto"
+                    className="mood-spotlight flex-shrink-0 group relative cursor-pointer self-center lg:self-auto"
                   >
-                    <div className="relative p-2 rounded-3xl bg-white/10 border border-white/15 shadow-2xl backdrop-blur-xl group-hover:border-white/30 transition">
+                    <div className="mood-spotlight-art relative p-2 rounded-3xl bg-white/10 border border-white/15 shadow-2xl backdrop-blur-xl group-hover:border-white/30 transition">
                       <SongCoverArt
                         song={recommendations.spotlight}
                         realCoverUrl={resolvedMedia[recommendations.spotlight.id]?.artworkUrl}
@@ -1584,15 +1713,15 @@ export default function App() {
                         <Play className="w-10 h-10 text-white fill-current" />
                       </div>
                     </div>
-                    <div className="text-center mt-2">
-                      <div className="text-[11px] font-bold text-white truncate max-w-[130px] mx-auto">
+                    <div className="mood-spotlight-caption text-center mt-2">
+                      <div className="mood-spotlight-title text-[11px] font-bold text-white truncate max-w-[130px] mx-auto">
                         {recommendations.spotlight.title}
-                      </div>
+                          </div>
                       <div className="text-[10px] text-slate-400 truncate max-w-[130px] mx-auto">
                         Your discovery spotlight
                       </div>
                     </div>
-                  </div>
+                  </button>
                 )}
               </div>
             </div>
@@ -1875,7 +2004,7 @@ export default function App() {
         )}
       </div>
 
-      {screen === 'home' && currentSong && isPlayerVisible && (
+      {(screen === 'home' || activeSong) && currentSong && isPlayerVisible && (
         <div className="fixed bottom-0 inset-x-0 z-30 flex justify-center px-3 pb-3 pointer-events-none transition-all duration-300">
           <div className="pointer-events-auto w-full max-w-5xl rounded-3xl bg-slate-900/95 border border-white/15 shadow-2xl backdrop-blur-2xl px-4 py-3">
             <div className="flex items-center gap-2.5 mb-2.5">
@@ -1991,7 +2120,7 @@ export default function App() {
       )}
 
       {isFullPlayerOpen && currentSong && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl overflow-y-auto flex flex-col items-center p-4 sm:p-8 animate-in fade-in">
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl overflow-y-auto flex flex-col items-center p-4 sm:p-8 pb-28 sm:pb-28 animate-in fade-in">
           <div className="w-full max-w-4xl my-auto">
             <div className="flex items-center justify-between pb-6 border-b border-white/10">
               <button
@@ -2004,10 +2133,10 @@ export default function App() {
 
               <div className="text-center">
                 <div className="text-[11px] uppercase tracking-widest text-slate-400">
-                  Playing from Mood Mix
+                  {radioSeed ? 'Playing from Song Radio' : 'Playing from Mood Mix'}
                 </div>
                 <div className="text-xs sm:text-sm font-bold text-amber-300">
-                  {playlistTitle}
+                  {radioSeed ? radioSeed.title : playlistTitle}
                 </div>
               </div>
 
@@ -2181,10 +2310,16 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-bold text-white flex items-center gap-2">
                       <ListMusic className="w-4 h-4 text-emerald-400" />
-                      <span>Up Next in Your Mood Queue</span>
+                      <span>{radioSeed ? `Song radio · ${radioSeed.title}` : 'Up Next in Your Mood Queue'}</span>
                     </h3>
-                    <span className="text-xs text-slate-400">Dynamically adapting</span>
+                    <span className="text-xs text-slate-400">{radioSeed ? 'Autoplay' : 'Dynamically adapting'}</span>
                   </div>
+                  {radioSeed && <>
+                    <p className="text-xs text-slate-400">Artist and genre discovery, guided by your mood. Suggestions, not verified audio similarity.</p>
+                    {radioStatus === 'loading' && <p role="status" className="text-xs text-violet-200">Finding similar songs for autoplay...</p>}
+                    {radioStatus === 'error' && <div role="alert" className="text-sm text-rose-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry song radio</button></div>}
+                    {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No related previews found. Try another song or mood.</p>}
+                  </>}
 
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                     {queueList.map((item, idx) => {
@@ -2193,7 +2328,7 @@ export default function App() {
                       return (
                         <div
                           key={item.id}
-                          onClick={() => handleSelectSong(item, true)}
+                          onClick={() => handleSelectSong(item, true, { preserveRadio: true })}
                           className={`p-2.5 rounded-2xl border flex items-center gap-3 cursor-pointer transition ${
                             isCurrent
                               ? 'bg-white/15 border-white/30'

@@ -31,10 +31,39 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   for the current session, even after switching mixes. An already playing track
   continues when preferences change; choose a new track to change playback.
 - Search has debounced live results, preview-ready tracks, retry, recent selections
-  (session only), keyboard focus containment, and Escape-to-close.
+  saved on this device, keyboard focus containment, and Escape-to-close.
+- Search history keeps the last 10 unique terms in this browser's local storage,
+  newest first. A term is saved when you press Enter, select/preview a result, or
+  close search (including Escape and clicking outside), rather than saving every
+  keystroke. History survives reloads, is not synced across devices, and can be
+  removed using "Clear history". Storage errors are shown explicitly.
+- Returning visitors with saved history see "A little more your style" below the
+  original landing hero, in a compact horizontally scrollable song shelf rather
+  than a large introductory panel. It blends preview-ready results from the three most recent
+  searches, deduplicates songs, and shows the search behind each suggestion.
+  Refresh rotates picks within newly fetched search pools; overlap is possible.
+  Preview buttons keep the landing page open; song rows open the player with
+  song radio. Clearing history removes the section and cancels pending requests.
+  New visitors retain the normal landing page. These are search-based suggestions,
+  not an AI taste profile; loading, empty, timeout, and error states are explicit.
+- A floating search bar stays within reach while scrolling, above the mini-player
+  or inside the full-player view. On mobile, search opens as a bottom sheet.
+  Each opening starts with an empty search field and no stale results; recent
+  selections remain available as optional shortcuts. The header and mood card
+  avoid duplicate search buttons. The mobile mood card uses concise copy,
+  side-by-side playback/settings controls, and a compact spotlight row.
+- Each result has a separate left Play/Pause button to preview without leaving
+  search. Tapping the artwork, title, or rest of the result opens the full player
+  and starts (or resumes) that song, rather than toggling it off.
+- Selecting a search result starts song radio: artist and genre searches blended
+  with the current mood/language preference. The displayed queue, Next, Previous,
+  shuffle, and autoplay use that same pool; mood changes refresh it without
+  interrupting the current preview. Related-song loading, empty, and failure
+  states are explicit. Similarity is heuristic, not verified audio analysis.
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
 (or prefix with `npm exec --yes --package=node@22 --` on older Node).
+Run history tests with `node --test src/searchHistory.test.js`.
 
 ## Run locally
 
