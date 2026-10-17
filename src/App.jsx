@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery';
 import './App.css';
+import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
 import {
   Play,
   Pause,
@@ -563,7 +564,14 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchRevision, setSearchRevision] = useState(0);
-  const [recentSearches, setRecentSearches] = useState([]);
+  const [searchHistory, setSearchHistory] = useState(() => {
+    try {
+      return { terms: readSearchHistory(window.localStorage), error: '' };
+    } catch (error) {
+      console.error('Unable to read search history.', error);
+      return { terms: [], error: 'Search history could not be read on this device. You can still search or try clearing history.' };
+    }
+  });
   const [discovery, setDiscovery] = useState({ key: '', songs: [], status: 'loading', error: '' });
   const [discoveryRevision, setDiscoveryRevision] = useState(0);
   const [savedSongs, setSavedSongs] = useState([]);
@@ -716,7 +724,6 @@ export default function App() {
     document.body.style.overflow = 'hidden';
     searchInputRef.current?.focus();
     function onKeyDown(event) {
-      if (event.key === 'Escape') setIsSearchOpen(false);
       if (event.key !== 'Tab') return;
       const elements = [...searchDialogRef.current.querySelectorAll('button, input')].filter((el) => !el.disabled);
       const first = elements[0];
@@ -867,6 +874,18 @@ export default function App() {
     }
   }, [songUrl, currentSongId, activeSong, isPlaying, isMuted, handlePlaybackError]);
 
+  const rememberSearch = useCallback(() => {
+    if (!searchQuery.trim()) return;
+    const terms = addSearchTerm(searchHistory.terms, searchQuery);
+    try {
+      window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(terms));
+      setSearchHistory({ terms, error: '' });
+    } catch (error) {
+      console.error('Unable to save search history.', error);
+      setSearchHistory({ terms, error: 'Search history is available for this visit, but could not be saved on this device.' });
+    }
+  }, [searchHistory.terms, searchQuery]);
+
   const handleSelectSong = (song, playImmediately = true, { keepSearchOpen = false, openPlayer = false, seedRadio = false, preserveRadio = false, toggle = true } = {}) => {
     waitingForRadioRef.current = false;
     if (!keepSearchOpen) setScreen('home');
@@ -877,7 +896,7 @@ export default function App() {
     if (!keepSearchOpen) setIsSearchOpen(false);
     setSavedSongs((prev) => prev.some((entry) => entry.id === song.id) ? prev : [...prev, song]);
     if (isSearchOpen && searchQuery.trim()) {
-      setRecentSearches((prev) => [searchQuery.trim(), ...prev.filter((term) => term !== searchQuery.trim())].slice(0, 5));
+      rememberSearch();
     }
     setIsPlayerVisible(true);
     if (activeSong?.id === song.id) {
@@ -1029,6 +1048,22 @@ export default function App() {
     setIsSearching(Boolean(query.trim()));
   };
 
+  const closeSearch = () => {
+    rememberSearch();
+    setIsSearchOpen(false);
+  };
+
+  const clearSearchHistory = () => {
+    try {
+      window.localStorage.removeItem(SEARCH_HISTORY_KEY);
+      setSearchHistory({ terms: [], error: '' });
+      triggerToast('Search history cleared from this device.');
+    } catch (error) {
+      console.error('Unable to clear search history.', error);
+      setSearchHistory((previous) => ({ ...previous, error: 'Search history could not be cleared. Check your browser storage settings and try again.' }));
+    }
+  };
+
   const openSearch = () => {
     searchReturnFocusRef.current = document.activeElement;
     updateSearch('');
@@ -1162,15 +1197,15 @@ export default function App() {
       )}
 
       {isSearchOpen && (
-        <div className="search-overlay fixed inset-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) setIsSearchOpen(false); }}>
-          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl space-y-4 overflow-y-auto">
+        <div className="search-overlay fixed inset-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
+          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl space-y-4 overflow-y-auto">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] tracking-[0.25em] uppercase text-violet-300 font-bold mb-2">The discovery studio</p>
                 <h2 id="search-title" className="text-xl sm:text-3xl font-black tracking-tight">Find your next song.</h2>
                 <p className="text-xs text-slate-400 mt-2">Left button to preview. Tap a song to open its player and song radio.</p>
               </div>
-              <button aria-label="Close search" onClick={() => setIsSearchOpen(false)} className="search-touch-button rounded-full bg-white/5 hover:bg-white/15"><X className="w-5 h-5" /></button>
+              <button aria-label="Close search" onClick={closeSearch} className="search-touch-button rounded-full bg-white/5 hover:bg-white/15"><X className="w-5 h-5" /></button>
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
               <div className="flex items-center gap-3 flex-1">
@@ -1181,6 +1216,7 @@ export default function App() {
                   aria-label="Search songs or artists"
                   value={searchQuery}
                   onChange={(e) => updateSearch(e.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) rememberSearch(); }}
                   placeholder="What do you want to hear?"
                   className="min-w-0 w-full bg-transparent py-3 text-base text-white placeholder-slate-400 focus:outline-none"
                 />
@@ -1197,6 +1233,9 @@ export default function App() {
               </button>
             </div>
 
+            {searchHistory.error && <div role="alert" className="text-xs text-amber-200 rounded-xl border border-amber-300/20 p-3">
+              <p>{searchHistory.error}</p><button onClick={clearSearchHistory} className="underline mt-2">Clear history</button>
+            </div>}
             {!searchQuery.trim() && (
               <div className="space-y-5 py-2">
                 <div className="rounded-2xl bg-gradient-to-r from-violet-500/15 to-rose-500/10 p-4 border border-violet-400/20">
@@ -1205,9 +1244,13 @@ export default function App() {
                     Explore {moodProfile.vibeTag} <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
-                {recentSearches.length > 0 && <div>
-                  <p className="text-[11px] uppercase tracking-widest text-slate-400 mb-2">Recently explored</p>
-                  <div className="flex flex-wrap gap-2">{recentSearches.map((term) => <button key={term} onClick={() => updateSearch(term)} className="search-chip"><Clock className="w-3 h-3" />{term}</button>)}</div>
+                {searchHistory.terms.length > 0 && <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="text-[11px] uppercase tracking-widest text-slate-400">Recent searches</p>
+                    <button onClick={clearSearchHistory} className="text-xs text-violet-200 min-h-11 px-2">Clear history</button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mb-3">Last 10 searches. Saved only in this browser on this device.</p>
+                  <div className="flex flex-wrap gap-2">{searchHistory.terms.map((term) => <button key={term} onClick={() => updateSearch(term)} className="search-chip max-w-full"><Clock className="w-3 h-3 shrink-0" /><span className="truncate">{term}</span></button>)}</div>
                 </div>}
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Try a favorite</span>
                 <div className="flex flex-wrap gap-2">

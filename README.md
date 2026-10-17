@@ -31,7 +31,12 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   for the current session, even after switching mixes. An already playing track
   continues when preferences change; choose a new track to change playback.
 - Search has debounced live results, preview-ready tracks, retry, recent selections
-  (session only), keyboard focus containment, and Escape-to-close.
+  saved on this device, keyboard focus containment, and Escape-to-close.
+- Search history keeps the last 10 unique terms in this browser's local storage,
+  newest first. A term is saved when you press Enter, select/preview a result, or
+  close search (including Escape and clicking outside), rather than saving every
+  keystroke. History survives reloads, is not synced across devices, and can be
+  removed using "Clear history". Storage errors are shown explicitly.
 - A floating search bar stays within reach while scrolling, above the mini-player
   or inside the full-player view. On mobile, search opens as a bottom sheet.
   Each opening starts with an empty search field and no stale results; recent
@@ -49,6 +54,7 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
 (or prefix with `npm exec --yes --package=node@22 --` on older Node).
+Run history tests with `node --test src/searchHistory.test.js`.
 
 ## Run locally
 
