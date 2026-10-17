@@ -16,12 +16,11 @@ const INTENT_TERMS = {
 };
 
 export function discoveryQueries(mood, intent, language, revision = 0) {
-  const terms = MOOD_TERMS[mood];
-  const intentTerms = INTENT_TERMS[intent] || terms;
+  const terms = INTENT_TERMS[intent] || MOOD_TERMS[mood];
   const prefix = language === 'Surprise' ? '' : language === 'Instrumental' ? 'instrumental' : language;
   return [...new Set([
     `${prefix} ${terms[revision % terms.length]}`.trim(),
-    `${prefix} ${intentTerms[(revision + 1) % intentTerms.length]}`.trim(),
+    `${prefix} ${terms[(revision + 1) % terms.length]}`.trim(),
   ])];
 }
 
@@ -73,6 +72,64 @@ export function buildDiscoveryMix(groups, preferences) {
   return [...firstPicks, ...moreFromArtists];
 }
 
+const INTENT_MOODS = { uplift: 'happy', relax: 'calm', energetic: 'motivated', meaningful: 'sad' };
+
+export function prioritizeFreshSongs(songs, seenTitles = [], limit = songs.length) {
+  const recent = new Map(seenTitles.map((title, index) => [recordingTitle(title), index]));
+  return songs.map((song, index) => ({ song, index, lastSeen: recent.get(recordingTitle(song.title)) ?? -1 }))
+    .sort((a, b) => a.lastSeen - b.lastSeen || a.index - b.index)
+    .slice(0, limit)
+    .map(({ song }) => song);
+}
+
+export function moodDiscoverySeeds(catalog, { mood, intent, language }, revision = 0, seenTitles = []) {
+  const target = intent === 'match' ? mood : INTENT_MOODS[intent];
+  const candidates = [...new Map(catalog.filter((song) =>
+    (language === 'Surprise' || song.language === language)
+    && song.moods.includes(target)
+    && (intent === 'match' || song.intents.includes(intent)))
+    .map((song) => [`${recordingTitle(song.title)}:${recordingArtists(song.artist).sort().join(',')}`, song])).values()];
+  const languages = [...new Set(candidates.map((song) => song.language))];
+  const groups = languages.map((lang) => candidates.filter((song) => song.language === lang));
+  const balanced = [];
+  for (let index = 0; index < Math.max(0, ...groups.map((group) => group.length)); index++) {
+    for (const group of groups) if (group[index]) balanced.push(group[index]);
+  }
+  if (!balanced.length) return [];
+  const offset = revision % balanced.length;
+  return prioritizeFreshSongs([...balanced.slice(offset), ...balanced.slice(0, offset)], seenTitles, 18);
+}
+
+function recordingTitle(value) {
+  return value.toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '')
+    .replace(/\((?:from |feat\.? |featuring )[^)]*\)/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function recordingArtists(value) {
+  return artistNames(value).map((artist) => artist.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, ' ').trim());
+}
+
+export function resolveMoodMix(groups, seeds, { mood, intent }) {
+  const songs = seeds.flatMap((seed, index) => {
+    const expectedTitle = recordingTitle(seed.title);
+    const expectedArtists = recordingArtists(seed.artist);
+    const matches = (groups[index] || []).filter((item) =>
+      recordingTitle(item.trackName || '') === expectedTitle
+      && expectedArtists.some((artist) => recordingArtists(item.artistName || '').includes(artist))
+      && !/\b(karaoke|tribute|cover|remix|sped up|slowed|lofi|lo-fi)\b/i.test(`${item.trackName} ${item.collectionName}`));
+    const track = normalizeTracks(matches, { mood, intent, language: seed.language })[0];
+    if (!track) return [];
+    return [{
+      ...track,
+      moods: seed.moods,
+      intents: seed.intents,
+      baseReason: `A curated ${seed.language} pick for ${intent === 'match' ? `your ${mood} mood` : { uplift: 'lifting your mood', relax: 'unwinding', energetic: 'an energy boost', meaningful: 'reflection' }[intent]}. Mood fit is subjective.`,
+    }];
+  });
+  return [...new Map(songs.map((song) => [song.id, song])).values()];
+}
+
 const RADIO_STYLES = [
   { label: 'Garba / Dandiya', query: 'garba dandiya', pattern: /garba|garbo|garbe|dandiya|navratri|નવરાત્રી|ગરબા|ગરબો|डांडिया|गरबा/i },
   { label: 'Bhajan', query: 'bhajan', pattern: /bhajan|ભજન|भजन/i },
@@ -117,6 +174,35 @@ export function buildRelatedMix(groups, seed, preferences) {
     }));
 }
 
+export function moodSuggestionQuery(song) {
+  const artist = artistNames(song.artist)[0];
+  const style = radioStyle(song);
+  return style ? `${artist} ${style.query}` : artist;
+}
+
+export function buildMoodSuggestions(groups, seeds, excludedSongs, revision = 0, seenTitles = []) {
+  const excludedIds = new Set(excludedSongs.map((song) => song.id));
+  const sameRecording = (a, b) => recordingTitle(a.title) === recordingTitle(b.title)
+    && recordingArtists(a.artist).some((artist) => recordingArtists(b.artist).includes(artist));
+  const related = groups.map((group, index) =>
+    buildRelatedMix([group], { ...seeds[index], genre: null }, { mood: null, intent: null })
+      .filter((song) => !/\b(karaoke|tribute|cover|remix|sped up|slowed)\b/i.test(`${song.title} ${song.album}`)
+        && (radioStyle(seeds[index]) || !radioStyle(song))
+        && (radioStyle(seeds[index])?.label === 'Lo-fi' || !/\blo[\s-]?fi\b/i.test(`${song.title} ${song.album}`))));
+  const songs = [];
+  for (let index = 0; index < Math.max(0, ...related.map((group) => group.length)); index++) {
+    for (const group of related) {
+      const song = group[index];
+      if (!song) continue;
+      if (excludedIds.has(song.id) || excludedSongs.some((excluded) => sameRecording(song, excluded))
+        || songs.some((previous) => sameRecording(song, previous))) continue;
+      songs.push(song);
+    }
+  }
+  const offset = songs.length ? revision % songs.length : 0;
+  return prioritizeFreshSongs([...songs.slice(offset), ...songs.slice(0, offset)], seenTitles, 6);
+}
+
 export function upcomingTracks(tracks, currentId) {
   const index = tracks.findIndex((song) => song.id === currentId);
   return index < 0 ? tracks : [...tracks.slice(index + 1), ...tracks.slice(0, index)];
@@ -140,7 +226,13 @@ export function buildTasteMix(groups, terms, revision = 0) {
     });
 }
 
+const searchCache = new Map();
+
 export async function searchMusic(term, signal) {
+  signal?.throwIfAborted();
+  const key = term.trim().toLowerCase().replace(/\s+/g, ' ');
+  const cached = searchCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.results;
   const params = new URLSearchParams({
     term, media: 'music', entity: 'song', limit: '30', country: 'IN',
   });
@@ -148,5 +240,18 @@ export async function searchMusic(term, signal) {
   if (!response.ok) throw new Error(`Music search unavailable (HTTP ${response.status}).`);
   const data = await response.json();
   if (!Array.isArray(data.results)) throw new Error('Music service returned an invalid response.');
+  if (searchCache.size >= 150) searchCache.delete(searchCache.keys().next().value);
+  searchCache.set(key, { results: data.results, expires: Date.now() + 10 * 60 * 1000 });
   return data.results;
+}
+
+export async function searchMusicBatch(terms, signal) {
+  const responses = await Promise.allSettled(terms.map((term) => searchMusic(term, signal)));
+  const failures = responses.filter((response) => response.status === 'rejected');
+  const groups = responses.map((response) => response.status === 'fulfilled' ? response.value : []);
+  if (failures.length === responses.length && failures.length) throw failures[0].reason;
+  const error = failures.length
+    ? `${failures.length} music searches could not finish. ${failures[0].reason.message} Showing available previews; retry for more.`
+    : '';
+  return { groups, error };
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery';
+import { buildMoodSuggestions, buildRelatedMix, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
+import { MOOD_CATALOG } from './moodCatalog.js';
 import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
@@ -139,8 +140,8 @@ const LANGUAGE_PROFILES = [
   { id: 'English', label: 'English Pop / Indie', badge: 'English', sub: 'Global chart-toppers, alt-indie acoustic & modern groove' },
   { id: 'Gujarati', label: 'Gujarati Folk & Pop', badge: 'Gujarati', sub: 'Coastal folk-fusion, acoustic melodies & cultural rhythms' },
   { id: 'Punjabi', label: 'Punjabi Hits', badge: 'Punjabi', sub: 'Modern Punjabi grooves, soulful heartbreak & powerhouse beats' },
-  { id: 'Instrumental', label: 'Lo-fi & Instrumental', badge: 'Lo-fi', sub: 'Neoclassical piano, chilled vinyl beats & ambient synths' },
-  { id: 'Surprise', label: 'Surprise me / Multilingual mix', badge: 'Multilingual', sub: 'Curated world blend tailored strictly to your emotional spectrum' }
+  { id: 'Instrumental', label: 'Instrumental', badge: 'Instrumental', sub: 'Piano melodies, atmospheric electronics & wordless listening' },
+  { id: 'Surprise', label: 'Surprise me / Multilingual mix', badge: 'Multilingual', sub: 'A blend across languages, curated for your listening goal' }
 ];
 
 const PUBLIC_FALLBACK_AUDIO = {
@@ -151,6 +152,18 @@ const PUBLIC_FALLBACK_AUDIO = {
 };
 
 const MASTER_SONGS = [
+  { id: 'curated-hi-iktara', title: 'Iktara', artist: 'Kavita Seth, Amit Trivedi', language: 'Hindi', moods: ['calm', 'stressed', 'romantic'], intents: ['relax', 'meaningful', 'match'], artColors: ['#14b8a6', '#6366f1', '#0f172a'] },
+  { id: 'curated-hi-zinda', title: 'Zinda', artist: 'Siddharth Mahadevan', language: 'Hindi', moods: ['motivated', 'happy'], intents: ['energetic', 'uplift', 'match'], artColors: ['#f97316', '#ef4444', '#0f172a'] },
+  { id: 'curated-en-perfect', title: 'Perfect', artist: 'Ed Sheeran', language: 'English', moods: ['romantic', 'calm'], intents: ['match', 'relax', 'meaningful'], artColors: ['#f43f5e', '#8b5cf6', '#0f172a'] },
+  { id: 'curated-en-bloom', title: 'Bloom', artist: 'The Paper Kites', language: 'English', moods: ['calm', 'stressed', 'romantic'], intents: ['match', 'relax'], artColors: ['#10b981', '#0ea5e9', '#0f172a'] },
+  { id: 'curated-en-happy', title: 'Happy', artist: 'Pharrell Williams', language: 'English', moods: ['happy', 'motivated'], intents: ['match', 'uplift', 'energetic'], artColors: ['#f59e0b', '#ec4899', '#0f172a'] },
+  { id: 'curated-gu-dhun', title: 'Dhun Laagi', artist: 'Sachin-Jigar', language: 'Gujarati', moods: ['romantic', 'calm', 'stressed'], intents: ['match', 'relax', 'meaningful'], artColors: ['#f43f5e', '#f59e0b', '#0f172a'] },
+  { id: 'curated-gu-dakla', title: 'Dakla', artist: 'Aditya Gadhvi', language: 'Gujarati', moods: ['happy', 'motivated'], intents: ['match', 'uplift', 'energetic'], artColors: ['#f97316', '#e11d48', '#0f172a'] },
+  { id: 'curated-pa-qismat', title: 'Qismat', artist: 'Ammy Virk', language: 'Punjabi', moods: ['sad'], intents: ['match', 'meaningful'], artColors: ['#6366f1', '#8b5cf6', '#0f172a'] },
+  { id: 'curated-pa-mann', title: 'Mann Bharrya', artist: 'B Praak', language: 'Punjabi', moods: ['sad'], intents: ['match', 'meaningful'], artColors: ['#6366f1', '#ec4899', '#0f172a'] },
+  { id: 'curated-pa-khaab', title: 'Khaab', artist: 'Akhil', language: 'Punjabi', moods: ['romantic', 'calm', 'stressed'], intents: ['match', 'relax'], artColors: ['#f43f5e', '#0ea5e9', '#0f172a'] },
+  { id: 'curated-in-nuvole', title: 'Nuvole Bianche', artist: 'Ludovico Einaudi', language: 'Instrumental', moods: ['sad', 'calm', 'stressed', 'romantic'], intents: ['match', 'meaningful', 'relax'], artColors: ['#64748b', '#6366f1', '#0f172a'] },
+  { id: 'curated-in-sunset', title: 'Sunset Lover', artist: 'Petit Biscuit', language: 'Instrumental', moods: ['happy', 'calm', 'motivated'], intents: ['match', 'uplift', 'energetic', 'relax'], artColors: ['#fb923c', '#f472b6', '#0f172a'] },
   {
     id: 'hi-1',
     title: 'Ilahi',
@@ -498,6 +511,21 @@ const MoodTuneLogo = ({ className = "w-9 h-9" }) => (
   />
 );
 
+const QuizOption = ({ selected, scene, title, description, badge, onClick }) => (
+  <button type="button" onClick={onClick} aria-pressed={selected} className={`quiz-option ${selected ? 'quiz-option-selected' : ''}`}>
+    <span aria-hidden="true" className="quiz-option-aurora" data-mood={scene} />
+    <span aria-hidden="true" className="quiz-option-shade" />
+    <span className="quiz-option-content">
+      <span className="flex items-start justify-between gap-3">
+        <span className="text-sm sm:text-base font-bold leading-snug">{title}</span>
+        {selected ? <Check className="w-5 h-5 shrink-0 text-violet-200" /> : <ChevronRight className="w-4 h-4 shrink-0 text-white/70" />}
+      </span>
+      <span className="block text-xs text-slate-200 leading-relaxed mt-2">{description}</span>
+      {badge && <span className="inline-block text-[10px] font-semibold rounded-full bg-black/30 border border-white/20 px-2 py-1 mt-3">{badge}</span>}
+    </span>
+  </button>
+);
+
 const SongCoverArt = ({ song, size = 'md', isPlaying = false, realCoverUrl = null }) => {
   const [failedUrl, setFailedUrl] = useState(null);
   const [c1, c2, c3] = song.artColors || ['#4f46e5', '#db2777', '#0f172a'];
@@ -574,7 +602,9 @@ export default function App() {
     }
   });
   const [discovery, setDiscovery] = useState({ key: '', songs: [], status: 'loading', error: '' });
-  const [discoveryRevision, setDiscoveryRevision] = useState(0);
+  const [discoveryRevision, setDiscoveryRevision] = useState(() => Math.floor(Math.random() * 10000));
+  const [moodSuggestions, setMoodSuggestions] = useState({ key: '', songs: [], status: 'loading', error: '' });
+  const [suggestionRevision, setSuggestionRevision] = useState(0);
   const [savedSongs, setSavedSongs] = useState([]);
   const [radioSeed, setRadioSeed] = useState(null);
   const [radio, setRadio] = useState({ key: '', songs: [], status: 'loading', error: '' });
@@ -602,6 +632,9 @@ export default function App() {
   const toastTimeoutRef = useRef(null);
   const searchInputRef = useRef(null);
   const searchDialogRef = useRef(null);
+  const quizPanelRef = useRef(null);
+  const moodSeenRef = useRef(new Map());
+  const suggestionsSeenRef = useRef(new Map());
   const searchReturnFocusRef = useRef(null);
   const waitingForRadioRef = useRef(false);
   const playbackHistoryRef = useRef([]);
@@ -609,19 +642,29 @@ export default function App() {
   const playbackStateRef = useRef({ activeSong, dislikedSongIds });
   useEffect(() => { playbackStateRef.current = { activeSong, dislikedSongIds }; }, [activeSong, dislikedSongIds]);
   const discoveryLanguage = activeLangFilter === 'All' ? currentLanguage : activeLangFilter;
+  const preferenceKey = `${currentMood}:${currentIntent}:${discoveryLanguage}`;
   const discoveryKey = `${currentMood}:${currentIntent}:${discoveryLanguage}:${discoveryRevision}`;
+  const discoveryEnabled = !['welcome', 'quiz', 'analyzing'].includes(screen);
   const discoveryStatus = discovery.key === discoveryKey ? discovery.status : 'loading';
   const discoveredSongs = useMemo(
     () => discovery.key === discoveryKey ? discovery.songs : [],
     [discovery, discoveryKey]
   );
+  const suggestionKey = `${discoveryKey}:${suggestionRevision}`;
+  const suggestionStatus = moodSuggestions.key === suggestionKey ? moodSuggestions.status : 'loading';
+  const suggestedSongs = useMemo(() => moodSuggestions.key === suggestionKey ? moodSuggestions.songs : [], [moodSuggestions, suggestionKey]);
+  useEffect(() => {
+    if (screen !== 'quiz') return;
+    quizPanelRef.current?.scrollIntoView({ block: 'start' });
+    quizPanelRef.current?.focus({ preventScroll: true });
+  }, [screen, quizStep]);
   const radioKey = `${radioSeed?.id}:${radioRevision}`;
   const radioStatus = radio.key === radioKey ? radio.status : 'loading';
   const radioSongs = useMemo(() => radio.key === radioKey ? radio.songs : [], [radio, radioKey]);
   const songCatalog = useMemo(() => {
-    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...radioSongs, ...liveSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
+    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...suggestedSongs, ...radioSongs, ...liveSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
     return [...songs.values()];
-  }, [savedSongs, discoveredSongs, radioSongs, liveSearchResults, activeSong]);
+  }, [savedSongs, discoveredSongs, suggestedSongs, radioSongs, liveSearchResults, activeSong]);
 
   useEffect(() => {
     if (!radioSeed) return;
@@ -663,19 +706,23 @@ export default function App() {
   }, [radioSeed, radioKey]);
 
   useEffect(() => {
+    if (!discoveryEnabled) return;
     const controller = new AbortController();
+    let cancelled = false;
     const timeout = setTimeout(() => controller.abort(new Error('Music discovery timed out. Please retry.')), 15000);
     async function discover() {
       try {
-        const queries = discoveryQueries(currentMood, currentIntent, discoveryLanguage, discoveryRevision);
-        const responses = await Promise.all(queries.map((query) => searchMusic(query, controller.signal)));
-        if (controller.signal.aborted) return;
-        const songs = buildDiscoveryMix(responses, {
-          mood: currentMood, intent: currentIntent, language: discoveryLanguage,
-        });
-        setDiscovery({ key: discoveryKey, songs, status: 'ready', error: '' });
+        const preferences = { mood: currentMood, intent: currentIntent, language: discoveryLanguage };
+        const seenTitles = moodSeenRef.current.get(preferenceKey) || [];
+        const seeds = moodDiscoverySeeds([...MOOD_CATALOG, ...MASTER_SONGS], preferences, discoveryRevision, seenTitles);
+        const { groups, error } = await searchMusicBatch(seeds.map((seed) => `${seed.title} ${seed.artist.split(',')[0]}`), controller.signal);
+        if (cancelled) return;
+        const songs = resolveMoodMix(groups, seeds, preferences);
+        if (error) console.error('Some mood searches failed.', error);
+        if (error && !songs.length) throw new Error(error);
+        setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error });
       } catch (error) {
-        if (controller.signal.aborted && error.name === 'AbortError') return;
+        if (cancelled) return;
         console.error('Live discovery failed.', error);
         setDiscovery({ key: discoveryKey, songs: [], status: 'error', error: error.message });
       } finally {
@@ -684,10 +731,44 @@ export default function App() {
     }
     discover();
     return () => {
+      cancelled = true;
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [currentMood, currentIntent, discoveryLanguage, discoveryRevision, discoveryKey]);
+  }, [currentMood, currentIntent, discoveryLanguage, discoveryRevision, discoveryKey, discoveryEnabled, preferenceKey]);
+
+  useEffect(() => {
+    if (!discoveryEnabled || discoveryStatus !== 'ready' || !discoveredSongs.length) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const timeout = setTimeout(() => controller.abort(new Error('Related suggestions timed out. Please retry.')), 15000);
+    async function suggest() {
+      try {
+        const artists = new Set();
+        const seeds = discoveredSongs.filter((song) => {
+          const artist = moodSuggestionQuery(song);
+          if (artists.has(artist)) return false;
+          artists.add(artist);
+          return true;
+        }).slice(0, 3);
+        const { groups, error } = await searchMusicBatch(seeds.map(moodSuggestionQuery), controller.signal);
+        if (cancelled) return;
+        const seenTitles = suggestionsSeenRef.current.get(preferenceKey) || [];
+        const songs = buildMoodSuggestions(groups, seeds, discoveredSongs, discoveryRevision + suggestionRevision, seenTitles);
+        if (error) console.error('Some artist suggestions failed.', error);
+        if (error && !songs.length) throw new Error(error);
+        setMoodSuggestions({ key: suggestionKey, songs, status: 'ready', error });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Related mood suggestions failed.', error);
+        setMoodSuggestions({ key: suggestionKey, songs: [], status: 'error', error: error.message });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    suggest();
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+  }, [discoveryEnabled, discoveryStatus, discoveredSongs, discoveryRevision, suggestionRevision, suggestionKey, preferenceKey]);
 
   useEffect(() => {
     if (!isSearchOpen) return;
@@ -807,15 +888,14 @@ export default function App() {
     const scored = discoveredSongs.filter((song) => !dislikedSongIds.includes(song.id)).map((song, index) => ({
       ...song,
       score: 100 - index + (likedSongIds.includes(song.id) ? 30 : 0) - (skippedSongIds.includes(song.id) ? 50 : 0),
-      matchWhy: `Live discovery for ${moodProfile.shortLabel} / ${intentProfile.shortLabel}. ${song.baseReason}`,
+      matchWhy: `${moodProfile.shortLabel} / ${intentProfile.shortLabel}. ${song.baseReason}`,
     }));
 
     scored.sort((a, b) => b.score - a.score);
 
-    const madeForMood = scored.slice(0, 6);
-    const spotlight = scored[0];
-    const madeForMoodIds = new Set(madeForMood.map((s) => s.id));
-    const youMightLike = scored.filter((s) => !madeForMoodIds.has(s.id)).slice(0, 6);
+    const madeForMood = prioritizeFreshSongs(scored, discovery.seenTitles, 6);
+    const spotlight = madeForMood[0];
+    const youMightLike = suggestedSongs.filter((song) => !dislikedSongIds.includes(song.id));
 
     let becauseLiked = [];
     let lastLiked = null;
@@ -833,7 +913,19 @@ export default function App() {
     }
 
     return { spotlight, madeForMood, youMightLike, becauseLiked, lastLiked, allScored: scored };
-  }, [discoveredSongs, dislikedSongIds, likedSongIds, skippedSongIds, moodProfile, intentProfile, savedSongs]);
+  }, [discoveredSongs, suggestedSongs, dislikedSongIds, likedSongIds, skippedSongIds, moodProfile, intentProfile, savedSongs, discovery.seenTitles]);
+
+  useEffect(() => {
+    if (discoveryStatus !== 'ready' || !discoveryEnabled) return;
+    const previous = moodSeenRef.current.get(preferenceKey) || [];
+    moodSeenRef.current.set(preferenceKey, [...previous, ...recommendations.madeForMood.map((song) => song.title)].slice(-120));
+  }, [discoveryStatus, discoveryEnabled, preferenceKey, recommendations.madeForMood]);
+
+  useEffect(() => {
+    if (suggestionStatus !== 'ready' || !discoveryEnabled) return;
+    const previous = suggestionsSeenRef.current.get(preferenceKey) || [];
+    suggestionsSeenRef.current.set(preferenceKey, [...previous, ...suggestedSongs.map((song) => song.title)].slice(-120));
+  }, [suggestionStatus, discoveryEnabled, preferenceKey, suggestedSongs]);
 
   const currentSong = useMemo(() => {
     const base = activeSong || recommendations.spotlight;
@@ -1108,10 +1200,8 @@ export default function App() {
   }, []);
 
   const filteredMadeForMood = useMemo(() => {
-    if (activeLangFilter === 'All') return recommendations.madeForMood;
-    return recommendations.allScored
-      .filter((s) => s.language.toLowerCase() === activeLangFilter.toLowerCase())
-      .slice(0, 6);
+    return recommendations.madeForMood
+      .filter((s) => activeLangFilter === 'All' || s.language.toLowerCase() === activeLangFilter.toLowerCase());
   }, [recommendations, activeLangFilter]);
 
   return (
@@ -1450,14 +1540,14 @@ export default function App() {
 
         {screen === 'quiz' && (
           <div className="min-h-[78vh] w-full flex flex-col justify-center items-center px-2 py-8">
-            <div className="max-w-2xl w-full bg-slate-900/85 border border-white/15 rounded-3xl p-6 sm:p-10 shadow-2xl backdrop-blur-2xl">
-              <div className="flex items-center justify-between mb-6">
+            <div ref={quizPanelRef} tabIndex={-1} role="group" aria-label={`Find my sound, step ${quizStep + 1} of 3`} className="max-w-2xl w-full bg-slate-900/85 border border-white/15 rounded-3xl p-5 sm:p-10 shadow-2xl backdrop-blur-2xl">
+              <div className="flex items-center justify-between gap-3 mb-6">
                 <button
                   onClick={() => {
                     if (quizStep === 0) setScreen('welcome');
                     else setQuizStep((s) => s - 1);
                   }}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-white transition"
+                  className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-white transition"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   <span>Back</span>
@@ -1467,7 +1557,7 @@ export default function App() {
                   {[0, 1, 2].map((step) => (
                     <div
                       key={step}
-                      className={`h-1.5 rounded-full transition-all duration-300 ${
+                      className={`hidden sm:block h-1.5 rounded-full transition-all duration-300 ${
                         step === quizStep
                           ? 'w-8 bg-amber-400'
                           : step < quizStep
@@ -1476,14 +1566,14 @@ export default function App() {
                       }`}
                     />
                   ))}
-                  <span className="text-xs text-slate-400 ml-1">Step {quizStep + 1} of 3</span>
+                  <span className="text-xs text-slate-400 whitespace-nowrap">Step {quizStep + 1} of 3</span>
                 </div>
 
                 <button
                   onClick={handleSkipDirectlyToSongs}
-                  className="text-xs font-semibold text-amber-300 hover:text-amber-200 transition"
+                  className="shrink-0 text-xs font-semibold text-amber-300 hover:text-amber-200 transition"
                 >
-                  Skip to Songs →
+                  <span className="sm:hidden">Skip →</span><span className="hidden sm:inline">Skip to Songs →</span>
                 </button>
               </div>
 
@@ -1497,35 +1587,21 @@ export default function App() {
                     Pick the emotional landscape that matches your present state of mind.
                   </p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+                  <div className="quiz-option-grid grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     {MOOD_PROFILES.map((m) => {
                       const isSelected = currentMood === m.id;
                       return (
-                        <button
+                        <QuizOption
                           key={m.id}
+                          selected={isSelected}
+                          scene={m.id}
+                          title={m.label}
+                          description={m.subtitle}
                           onClick={() => {
                             setCurrentMood(m.id);
                             setQuizStep(1);
                           }}
-                          className={`p-4 rounded-2xl border text-left transition-all flex items-start gap-3.5 group ${
-                            isSelected
-                              ? 'bg-white/15 border-amber-400/60 shadow-lg'
-                              : 'bg-white/[0.04] hover:bg-white/[0.09] border-white/10'
-                          }`}
-                        >
-                          <div
-                            className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${m.cardGradient} flex items-center justify-center flex-shrink-0 shadow-md group-hover:scale-105 transition`}
-                          >
-                            <Music className="w-5 h-5 text-white" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-white text-sm sm:text-base">{m.label}</span>
-                              {isSelected && <Check className="w-4 h-4 text-amber-400" />}
-                            </div>
-                            <p className="text-xs text-slate-400 mt-1 line-clamp-2">{m.subtitle}</p>
-                          </div>
-                        </button>
+                        />
                       );
                     })}
                   </div>
@@ -1542,28 +1618,21 @@ export default function App() {
                     Would you like to stay in this emotional rhythm or gently shift your energy?
                   </p>
 
-                  <div className="space-y-3 pt-2">
+                  <div className="quiz-option-grid grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     {INTENT_PROFILES.map((intent) => {
                       const isSelected = currentIntent === intent.id;
                       return (
-                        <button
+                        <QuizOption
                           key={intent.id}
+                          selected={isSelected}
+                          scene={{ match: currentMood, uplift: 'happy', relax: 'calm', energetic: 'motivated', meaningful: 'sad' }[intent.id]}
+                          title={intent.shortLabel}
+                          description={intent.desc}
                           onClick={() => {
                             setCurrentIntent(intent.id);
                             setQuizStep(2);
                           }}
-                          className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between gap-4 ${
-                            isSelected
-                              ? 'bg-white/15 border-emerald-400/60 shadow-lg'
-                              : 'bg-white/[0.04] hover:bg-white/[0.09] border-white/10'
-                          }`}
-                        >
-                          <div>
-                            <div className="font-semibold text-white text-sm sm:text-base">{intent.label}</div>
-                            <div className="text-xs text-slate-400 mt-0.5">{intent.desc}</div>
-                          </div>
-                          <ChevronRight className="w-5 h-5 text-slate-400 flex-shrink-0" />
-                        </button>
+                        />
                       );
                     })}
                   </div>
@@ -1580,27 +1649,19 @@ export default function App() {
                     We’ll weave your emotional state and energy goal with your chosen musical styles.
                   </p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+                  <div className="quiz-option-grid grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     {LANGUAGE_PROFILES.map((lang) => {
                       const isSelected = currentLanguage === lang.id;
                       return (
-                        <button
+                        <QuizOption
                           key={lang.id}
+                          selected={isSelected}
+                          scene={{ Hindi: 'romantic', English: 'motivated', Gujarati: 'happy', Punjabi: 'motivated', Instrumental: 'calm', Surprise: 'romantic' }[lang.id]}
+                          title={lang.label}
+                          description={lang.sub}
+                          badge={lang.badge}
                           onClick={() => finishQuizWithLang(lang.id)}
-                          className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                            isSelected
-                              ? 'bg-white/15 border-rose-400/60 shadow-lg'
-                              : 'bg-white/[0.04] hover:bg-white/[0.09] border-white/10'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between w-full mb-1.5">
-                            <span className="font-bold text-white text-base">{lang.label}</span>
-                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
-                              {lang.badge}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400">{lang.sub}</p>
-                        </button>
+                        />
                       );
                     })}
                   </div>
@@ -1787,7 +1848,7 @@ export default function App() {
                     <span>Made for Your Mood</span>
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Live iTunes discovery, guided by your mood, listening intent, and language. Not a trending chart.
+                    Curated for {intentProfile.shortLabel} in {langProfile.badge}, with live iTunes previews. Your listening goal takes priority.
                   </p>
                 </div>
 
@@ -1819,8 +1880,14 @@ export default function App() {
                   <h3 className="font-bold">The music service is taking a break.</h3><p className="text-sm text-slate-300 mt-2">{discovery.error}</p><button onClick={() => setDiscoveryRevision((value) => value + 1)} className="search-chip mt-4">Retry live discovery</button>
                 </div>
               ) : recommendations.allScored.length === 0 ? (
-                <div role="status" className="p-8 rounded-2xl border border-white/10 text-center"><Music className="w-8 h-8 mx-auto text-violet-300 mb-3" /><h3 className="font-bold">Let&apos;s try a different direction.</h3><p className="text-sm text-slate-400 mt-2">No playable previews for this mix. Change your language or intent, or find a fresh mix.</p></div>
-              ) : <p role="status" className="text-[11px] text-slate-500">{recommendations.allScored.length} playable discoveries. Search-based suggestions, not verified mood or language tags.</p>}
+                <div role="status" className="p-8 rounded-2xl border border-white/10 text-center"><Music className="w-8 h-8 mx-auto text-violet-300 mb-3" /><h3 className="font-bold">Let&apos;s try a different direction.</h3><p className="text-sm text-slate-400 mt-2">No matching curated previews for this mix. Change your language or intent, or find a fresh mix.</p></div>
+              ) : <p role="status" className="text-[11px] text-slate-500">Showing {filteredMadeForMood.length} of {recommendations.allScored.length} available mood picks. {recommendations.allScored.length > 6 ? 'Find a fresh mix to explore more.' : 'Try another mood or language for more variety.'}</p>}
+              {discoveryStatus === 'ready' && discovery.error && (
+                <div role="alert" className="text-xs text-amber-200">
+                  <p>{discovery.error}</p>
+                  <button type="button" className="search-chip mt-2" onClick={() => setDiscoveryRevision((value) => value + 1)}>Retry for more picks</button>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 {filteredMadeForMood.map((song) => {
                   const isCurrent = currentSong?.id === song.id;
@@ -1950,11 +2017,25 @@ export default function App() {
                 <div>
                   <h2 className="text-lg sm:text-xl font-extrabold text-white">You Might Also Like</h2>
                   <p className="text-xs text-slate-400">
-                    Cross-cultural discoveries bridging your current headspace and energy target.
+                    More from artists in your mood mix. These are artist-related discoveries, not verified mood or language matches.
                   </p>
                 </div>
+                <button type="button" onClick={() => setSuggestionRevision((value) => value + 1)} disabled={discoveryStatus !== 'ready' || !discoveredSongs.length || suggestionStatus === 'loading'} className="search-chip shrink-0 disabled:opacity-40">Refresh suggestions</button>
               </div>
 
+              {discoveryStatus === 'loading' || (discoveredSongs.length > 0 && suggestionStatus === 'loading') ? (
+                <p role="status" className="text-sm text-slate-400">Finding more from these artists...</p>
+              ) : discoveryStatus === 'error' || !discoveredSongs.length ? (
+                <p role="status" className="text-sm text-slate-400">Choose a mood mix with available previews to discover related artists.</p>
+              ) : suggestionStatus === 'error' ? (
+                <div role="alert" className="text-sm text-rose-200">
+                  <p>{moodSuggestions.error}</p>
+                  <button type="button" onClick={() => setSuggestionRevision((value) => value + 1)} className="search-chip mt-2">Retry suggestions</button>
+                </div>
+              ) : recommendations.youMightLike.length === 0 ? (
+                <p role="status" className="text-sm text-slate-400">No additional related previews for these artists. Try a fresh mood mix.</p>
+              ) : null}
+              {suggestionStatus === 'ready' && moodSuggestions.error && <p role="alert" className="text-xs text-amber-200">{moodSuggestions.error}</p>}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 sm:gap-4">
                 {recommendations.youMightLike.map((song) => {
                   const isCurrent = currentSong?.id === song.id;
