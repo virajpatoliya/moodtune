@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery.js';
+import { buildDiscoveryMix, buildRelatedMix, buildTasteMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery.js';
 
 test('discovery queries respond to mood, intent, language, and refresh', () => {
   const base = discoveryQueries('calm', 'match', 'Hindi');
@@ -95,4 +95,18 @@ test('visible upcoming queue matches playback order, wraps, and never repeats th
   assert.deepEqual(upcomingTracks(tracks, 'not-in-pool'), tracks);
   assert.deepEqual(upcomingTracks([{ id: 'a' }], 'a'), []);
   assert.deepEqual(upcomingTracks([], 'a'), []);
+});
+
+test('taste suggestions blend search sources, deduplicate, and include the actual search reason', () => {
+  const track = (id) => ({ trackId: id, trackName: `Song ${id}`, artistName: `Artist ${id}`, previewUrl: `https://example.com/${id}` });
+  const groups = [[track(1), track(2), track(3)], [track(4), track(1), track(5)], [track(6), track(7), track(8)]];
+  const terms = ['Ilahi', 'Kasoor', 'Arijit Singh'];
+  const songs = buildTasteMix(groups, terms);
+  assert.equal(songs.length, 6);
+  assert.equal(new Set(songs.map((song) => song.id)).size, 6);
+  assert.deepEqual(songs.slice(0, 3).map((song) => song.searchTerm), terms);
+  assert.ok(songs.every((song) => song.matchWhy.includes(song.searchTerm) && song.language === 'Global'));
+  assert.notDeepEqual(songs.map((song) => song.id), buildTasteMix(groups, terms, 1).map((song) => song.id));
+  assert.deepEqual(buildTasteMix([[], [], []], terms), []);
+  assert.deepEqual(buildTasteMix([], []), []);
 });

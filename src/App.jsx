@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery';
 import './App.css';
+import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
 import {
   Play,
@@ -1390,6 +1391,12 @@ export default function App() {
               <div className="sound-bars">{[22, 38, 16, 48, 30, 56, 20, 44, 28, 40, 18, 32].map((height, index) => <i key={index} style={{ height, animationDelay: `${index * 0.12}s` }} />)}</div>
             </div>
             </div>
+            <TasteSuggestions
+              history={searchHistory.terms} currentSongId={currentSong?.id} isPlaying={isPlaying}
+              onPreview={(song) => handleSelectSong(song, true, { keepSearchOpen: true, seedRadio: true })}
+              onOpen={(song) => handleSelectSong(song, true, { openPlayer: true, seedRadio: true, toggle: false })}
+              onClear={clearSearchHistory}
+            />
               <div className="border-t border-white/10 pt-8">
                 <div className="flex flex-wrap justify-between gap-2 mb-5">
                   <div><p className="text-[10px] uppercase tracking-[0.25em] text-violet-300 mb-2">Start with a feeling</p><h2 className="text-2xl font-bold tracking-tight">What&apos;s your energy today?</h2></div>

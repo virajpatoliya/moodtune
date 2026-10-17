@@ -37,6 +37,15 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   close search (including Escape and clicking outside), rather than saving every
   keystroke. History survives reloads, is not synced across devices, and can be
   removed using "Clear history". Storage errors are shown explicitly.
+- Returning visitors with saved history see "A little more your style" below the
+  original landing hero, in a compact horizontally scrollable song shelf rather
+  than a large introductory panel. It blends preview-ready results from the three most recent
+  searches, deduplicates songs, and shows the search behind each suggestion.
+  Refresh rotates picks within newly fetched search pools; overlap is possible.
+  Preview buttons keep the landing page open; song rows open the player with
+  song radio. Clearing history removes the section and cancels pending requests.
+  New visitors retain the normal landing page. These are search-based suggestions,
+  not an AI taste profile; loading, empty, timeout, and error states are explicit.
 - A floating search bar stays within reach while scrolling, above the mini-player
   or inside the full-player view. On mobile, search opens as a bottom sheet.
   Each opening starts with an empty search field and no stale results; recent

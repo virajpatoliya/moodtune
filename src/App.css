@@ -105,6 +105,51 @@
 
 .search-overlay { z-index: 70; }
 
+.taste-shelf {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+  padding: 4px 0 10px;
+  scrollbar-width: thin;
+  scrollbar-color: #8b5cf660 transparent;
+}
+
+.taste-card {
+  flex: 0 0 168px;
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+.taste-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  overflow: hidden;
+  border-radius: 12px;
+  color: #ddd6fe;
+  background: linear-gradient(135deg, #6d28d9, #be185d);
+}
+
+.taste-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.taste-art img[hidden] { display: none; }
+.taste-preview {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #c4b5fd;
+  color: #201733;
+}
+
+@media (min-width: 1024px) {
+  .taste-card { flex-basis: calc((100% - 60px) / 6); }
+}
+
 .floating-search {
   position: fixed;
   z-index: 60;

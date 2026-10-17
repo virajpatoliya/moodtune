@@ -96,6 +96,24 @@ export function upcomingTracks(tracks, currentId) {
   return index < 0 ? tracks : [...tracks.slice(index + 1), ...tracks.slice(0, index)];
 }
 
+export function buildTasteMix(groups, terms, revision = 0) {
+  const rotated = groups.map((group) => {
+    if (!group.length) return group;
+    const offset = (revision * 2) % group.length;
+    return [...group.slice(offset), ...group.slice(0, offset)];
+  });
+  return buildDiscoveryMix(rotated, { mood: null, intent: null })
+    .slice(0, 6)
+    .map((song) => {
+      const source = groups.findIndex((group) => group.some((item) => `itunes-${item.trackId}` === song.id));
+      return {
+        ...song,
+        searchTerm: terms[source],
+        matchWhy: `Suggested from your recent search for "${terms[source]}". Search-based discovery, not a verified prediction of your taste.`,
+      };
+    });
+}
+
 export async function searchMusic(term, signal) {
   const params = new URLSearchParams({
     term, media: 'music', entity: 'song', limit: '30', country: 'IN',
