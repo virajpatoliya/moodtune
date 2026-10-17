@@ -18,13 +18,40 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 
 ## Live discovery
 
-- Mood, listening intent, and language selections fetch a new pool of preview-ready
-  songs rather than reordering the fixed sample catalog. Language filter pills also
-  fetch new results. "Find a fresh mix" rotates search terms for more discovery;
-  the provider may return overlapping songs. Results blend both queries, remove
-  duplicate recordings, and prioritize artist variety.
-- These are search-based discovery results, **not trending charts**. Mood and language
-  are search hints, not verified song metadata. BPM and energy are not fabricated.
+- "Made for Your Mood" uses curated song/language/mood metadata rather than treating
+  broad mood words as verified song attributes. "Match my mood" follows the selected
+  mood; uplift, relax, energy, and reflection goals select happy, calm, motivated,
+  and reflective picks respectively, overriding a conflicting starting mood.
+  Language pills restrict the curated pool; Surprise balances across languages.
+  An expanded catalog supplies at least twelve distinct candidates for every
+  mood/goal/language combination. Up to 18 seeds are checked by title and artist
+  so unavailable recordings do not immediately shrink the six-song shelf.
+  Unrelated songs, alternate versions, covers, and recordings without previews are
+  excluded. Each visit starts at a randomized catalog position. "Find a fresh mix"
+  prioritizes unseen titles for the current preferences, then least-recently-shown
+  titles when the pool runs out. Likes do not pin previously shown songs above new
+  choices. The same freshness rule applies to artist suggestions. Recently shown
+  titles are remembered for this page session, separately for each mood/goal/language.
+  Small pools and storefront availability can still require some overlap.
+  Successful searches are cached in memory for ten minutes (up to 150 queries).
+  Partial API failures retain available previews with a visible warning and retry;
+  total failures show the discovery error state.
+- "You Might Also Like" independently searches up to three artists from the resolved
+  mood mix, rather than using leftovers from the six-song shelf. It excludes the
+  mood mix's recordings and deduplicates alternate releases. These suggestions
+  are metadata-related, not verified mood or language matches. Refresh, loading,
+  empty, and retry states are provided; this does not change current-song autoplay.
+- Mood fit is subjective human curation, **not audio analysis or a trending chart**.
+  Language/style labels come from the curated catalog, not arbitrary API results.
+  Coverage is intentionally limited: fewer matching previews are better than
+  unrelated fillers. No BPM or energy measurements are fabricated.
+- All three "Find my sound" steps use mood-colored flowing aurora cards, inspired
+  by [React Bits Aurora](https://reactbits.dev/backgrounds/aurora). This is an
+  original lightweight CSS adaptation, not the React Bits WebGL component.
+  Decorative gradients animate behind crisp text, with selected states and keyboard
+  focus outlines. Reduced-motion preferences disable the animation. No external
+  images, canvas contexts, or animation dependencies are required; the original
+  landing hero is unchanged.
 - Loading, empty, timeout, and service-error states are shown explicitly. Failed
   discovery does not silently substitute the old static playlist or demo audio.
 - Likes and early skips adjust the current mix. Saved track details remain available
