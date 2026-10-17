@@ -98,6 +98,95 @@
 
 .search-studio {
   background: radial-gradient(ellipse at top right, #6d28d933, transparent 65%), #101021;
+  max-height: 90dvh;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+}
+
+.search-overlay { z-index: 70; }
+
+.floating-search {
+  position: fixed;
+  z-index: 60;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(460px, calc(100% - 32px));
+  min-height: 56px;
+  padding: 8px 16px 8px 8px;
+  border: 1px solid #c4b5fd65;
+  border-radius: 999px;
+  background: #201733f5;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px #0008;
+  font-size: 13px;
+  color: #f1edff;
+}
+
+.floating-search-with-player { bottom: calc(128px + env(safe-area-inset-bottom)); }
+.floating-search[hidden] { display: none; }
+
+.floating-search-icon,
+.search-touch-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.floating-search-icon {
+  border-radius: 50%;
+  background: #8b5cf640;
+  color: #ddd6fe;
+}
+
+.search-preview-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin: 10px;
+  border-radius: 50%;
+  background: #c4b5fd;
+  color: #201733;
+}
+
+.search-preview-button:hover { background: #ddd6fe; }
+
+@media (max-width: 639px) {
+  .mood-summary-actions > button:first-child { flex: 1; }
+  .mood-summary-actions > button { white-space: nowrap; }
+  .mood-summary .mood-spotlight {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    align-self: stretch;
+    min-width: 0;
+    padding-top: 16px;
+    border-top: 1px solid #ffffff20;
+    text-align: left;
+  }
+  .mood-spotlight-art { padding: 0; border-radius: 12px; }
+  .mood-spotlight-art > div:first-child {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+  }
+  .mood-spotlight-caption { min-width: 0; margin-top: 0; text-align: left; }
+  .mood-spotlight-title { max-width: none; font-size: 13px; }
+  .mood-spotlight-caption > div:last-child { max-width: none; margin-top: 4px; }
+}
+
+@media (max-width: 360px) {
+  .floating-search { gap: 8px; font-size: 12px; }
+  .floating-search > span:last-child { display: none; }
+  .search-result img { display: none; }
 }
 
 .search-chip {

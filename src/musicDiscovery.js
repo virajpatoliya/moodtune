@@ -39,6 +39,7 @@ export function normalizeTracks(items, { mood, intent, language = 'Global' }) {
     title: item.trackName,
     artist: item.artistName || 'Unknown artist',
     album: item.collectionName || 'Single',
+    genre: item.primaryGenreName || null,
     language: language === 'Surprise' ? 'Global' : language,
     duration: 30,
     moods: [mood],
@@ -70,6 +71,29 @@ export function buildDiscoveryMix(groups, preferences) {
     }
   }
   return [...firstPicks, ...moreFromArtists];
+}
+
+export function relatedQueries(song, mood, intent, language) {
+  const moodQuery = discoveryQueries(mood, intent, language)[0];
+  return [...new Set([
+    song.artist,
+    `${song.genre || song.artist} ${moodQuery}`,
+  ])];
+}
+
+export function buildRelatedMix(groups, seed, preferences) {
+  const seedTitle = seed.title.trim().toLowerCase().replace(/\s*\([^)]*\)/g, '').trim();
+  return buildDiscoveryMix(groups, { ...preferences, language: 'Global' })
+    .filter((song) => song.id !== seed.id && song.title.toLowerCase().replace(/\s*\([^)]*\)/g, '').trim() !== seedTitle)
+    .map((song) => ({
+      ...song,
+      matchWhy: `Song radio inspired by ${seed.title}: artist and genre searches blended with your mood preference. Similarity and mood are suggestions, not audio analysis.`,
+    }));
+}
+
+export function upcomingTracks(tracks, currentId) {
+  const index = tracks.findIndex((song) => song.id === currentId);
+  return index < 0 ? tracks : [...tracks.slice(index + 1), ...tracks.slice(0, index)];
 }
 
 export async function searchMusic(term, signal) {

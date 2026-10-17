@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDiscoveryMix, discoveryQueries, normalizeTracks, searchMusic } from './musicDiscovery.js';
+import { buildDiscoveryMix, buildRelatedMix, discoveryQueries, normalizeTracks, relatedQueries, searchMusic, upcomingTracks } from './musicDiscovery.js';
 
 test('discovery queries respond to mood, intent, language, and refresh', () => {
   const base = discoveryQueries('calm', 'match', 'Hindi');
@@ -59,4 +59,40 @@ test('search surfaces HTTP and malformed-response errors', async (t) => {
   await assert.rejects(searchMusic('test'), /HTTP 429/);
   mock.mock.mockImplementation(async () => ({ ok: true, json: async () => ({}) }));
   await assert.rejects(searchMusic('test'), /invalid response/);
+});
+
+test('song radio combines seed artist and genre with mood preferences', () => {
+  const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A', genre: 'Indian Pop' };
+  const queries = relatedQueries(seed, 'calm', 'match', 'Hindi');
+  assert.equal(queries[0], 'Artist A');
+  assert.equal(queries[1], 'Indian Pop Hindi acoustic');
+  assert.notDeepEqual(queries, relatedQueries(seed, 'happy', 'match', 'Hindi'));
+  assert.notDeepEqual(queries, relatedQueries(seed, 'calm', 'match', 'English'));
+  assert.ok(relatedQueries({ ...seed, genre: null }, 'calm', 'match', 'Surprise')[1].startsWith('Artist A '));
+});
+
+test('song radio excludes the seed and alternate recordings, deduplicates, and retains genre', () => {
+  const track = (id, title, artist) => ({
+    trackId: id, trackName: title, artistName: artist,
+    primaryGenreName: 'Pop', previewUrl: `https://example.com/${id}`,
+  });
+  const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A' };
+  const a = track(2, 'Other song', 'Artist A');
+  const b = track(3, 'Mood song', 'Artist B');
+  const songs = buildRelatedMix([
+    [track(1, 'Seed', 'Artist A'), a, track(4, 'Seed (Acoustic)', 'Artist C')],
+    [b, a, { trackId: 5, trackName: 'No preview' }],
+  ], seed, { mood: 'calm', intent: 'match' });
+  assert.deepEqual(new Set(songs.map((song) => song.id)), new Set(['itunes-2', 'itunes-3']));
+  assert.ok(songs.every((song) => song.genre === 'Pop' && song.language === 'Global' && song.matchWhy.includes('Seed')));
+  assert.deepEqual(buildRelatedMix([], seed, { mood: 'calm', intent: 'match' }), []);
+});
+
+test('visible upcoming queue matches playback order, wraps, and never repeats the current track', () => {
+  const tracks = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  assert.deepEqual(upcomingTracks(tracks, 'b'), [{ id: 'c' }, { id: 'a' }]);
+  assert.deepEqual(upcomingTracks(tracks, 'c'), [{ id: 'a' }, { id: 'b' }]);
+  assert.deepEqual(upcomingTracks(tracks, 'not-in-pool'), tracks);
+  assert.deepEqual(upcomingTracks([{ id: 'a' }], 'a'), []);
+  assert.deepEqual(upcomingTracks([], 'a'), []);
 });
