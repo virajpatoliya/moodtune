@@ -87,6 +87,11 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   scrollable rows; Made for Your Mood and "Because you liked" scroll sideways in
   columns of three songs; You Might Also Like is a row of cover cards. Long helper
   copy is hidden on mobile. Tablet and desktop layouts are unchanged.
+- The browser/phone Back button follows in-app navigation: it steps back through
+  quiz steps and screens, and closes the search sheet, full player, or Change Mood
+  panel before leaving the site. Closing an overlay with its X uses the same history
+  entry, and opening the player from search replaces the search entry so Back does
+  not reopen search. Navigation is kept in memory; the URL does not change.
 - Each result has a separate left Play/Pause button to preview without leaving
   search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.

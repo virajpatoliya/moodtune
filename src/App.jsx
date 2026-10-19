@@ -4,6 +4,7 @@ import { MOOD_CATALOG } from './moodCatalog.js';
 import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
+import { planHistoryUpdate } from './appHistory.js';
 import {
   Play,
   Pause,
@@ -649,6 +650,9 @@ export default function App() {
   const moodSeenRef = useRef(new Map());
   const suggestionsSeenRef = useRef(new Map());
   const searchReturnFocusRef = useRef(null);
+  const analyzingTimeoutRef = useRef(null);
+  const applyLocationRef = useRef(null);
+  const historyRef = useRef({ stack: [], index: 0 });
   const waitingForRadioRef = useRef(false);
   const playbackHistoryRef = useRef([]);
   const radioPlayedRef = useRef(new Set());
@@ -1229,10 +1233,63 @@ export default function App() {
     setCurrentLanguage(langChoice);
     setActiveLangFilter('All');
     setScreen('analyzing');
-    setTimeout(() => {
+    clearTimeout(analyzingTimeoutRef.current);
+    analyzingTimeoutRef.current = setTimeout(() => {
       setScreen('home');
     }, 700);
   };
+
+  useEffect(() => {
+    applyLocationRef.current = (location) => {
+      clearTimeout(analyzingTimeoutRef.current);
+      if (isSearchOpen && !location.search) rememberSearch();
+      if (location.search && !isSearchOpen) {
+        searchReturnFocusRef.current = document.activeElement;
+        updateSearch('');
+      }
+      setScreen(location.screen);
+      if (location.screen === 'quiz') setQuizStep(location.step);
+      setIsSearchOpen(location.search);
+      setIsFullPlayerOpen(location.player);
+      setIsMoodModalOpen(location.mood);
+    };
+  });
+
+  useEffect(() => {
+    function onPopState(event) {
+      const entry = event.state?.moodtune;
+      if (!entry) return;
+      historyRef.current.index = entry.index;
+      historyRef.current.stack[entry.index] = entry.location;
+      applyLocationRef.current?.(entry.location);
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const location = { screen, step: quizStep, search: isSearchOpen, player: isFullPlayerOpen, mood: isMoodModalOpen };
+    const history = historyRef.current;
+    if (!history.stack.length) {
+      if (screen === 'analyzing') return;
+      history.stack = [location];
+      history.index = 0;
+      window.history.replaceState({ ...window.history.state, moodtune: { index: 0, location } }, '');
+      return;
+    }
+    const action = planHistoryUpdate(history.stack, history.index, location);
+    if (action === 'back') {
+      history.index -= 1;
+      window.history.back();
+    } else if (action === 'replace') {
+      history.stack[history.index] = location;
+      window.history.replaceState({ moodtune: { index: history.index, location } }, '');
+    } else if (action === 'push') {
+      history.index += 1;
+      history.stack = [...history.stack.slice(0, history.index), location];
+      window.history.pushState({ moodtune: { index: history.index, location } }, '');
+    }
+  }, [screen, quizStep, isSearchOpen, isFullPlayerOpen, isMoodModalOpen]);
 
   const formatDuration = (secs) => {
     if (isNaN(secs)) return '0:00';
