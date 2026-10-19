@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDiscoveryMix, buildMoodSuggestions, buildRelatedMix, buildTasteMix, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery.js';
+import { buildDiscoveryMix, buildMoodSuggestions, buildRadioQueue, buildRelatedMix, buildTasteMix, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery.js';
 import { MOOD_CATALOG } from './moodCatalog.js';
 
 const curated = [
@@ -286,6 +286,36 @@ test('generic radio requires a shared artist and matching genre when available',
     track(6, 'Unrelated Artist', 'Pop'),
   ]], seed, {});
   assert.deepEqual(songs.map((song) => song.id), ['itunes-2', 'itunes-3']);
+});
+
+test('radio queue fills to at least 15 in priority order: song, artist, genre, mood, search', () => {
+  const seed = { id: 'itunes-1', title: 'Seed', artist: 'Artist A & Artist B', genre: 'Bollywood', language: 'Hindi' };
+  const track = (id, artist, genre, title = `Song ${id}`) => ({
+    trackId: id, trackName: title, artistName: artist, primaryGenreName: genre, previewUrl: `https://example.com/${id}`,
+  });
+  const strict = [[track(2, 'Artist A', 'Bollywood'), track(3, 'Artist A', 'Bollywood')]];
+  const fill = [[track(4, 'Artist B', 'Indian Pop'), track(5, 'Other', 'Bollywood'), track(6, 'Other 2', 'Bollywood'),
+    track(7, 'Other 3', 'Rock'), track(8, 'Garba Star', 'Bollywood', 'Navratri Garba')]];
+  const moodSongs = Array.from({ length: 12 }, (_, i) => ({ id: `mood-${i}`, title: `Mood ${i}`, artist: `Mood Artist ${i}`, genre: i === 11 ? 'Bollywood' : 'Pop' }));
+  const search = [[track(30, 'Searched', 'Bollywood'), track(31, 'Searched', 'Metal')]];
+  const queue = buildRadioQueue(seed, { strictGroups: strict, fillGroups: fill, searchGroups: search, searchTerms: ['old search'], moodSongs, moodLabel: 'happy', excludeIds: ['mood-0'] });
+  const ids = queue.map((song) => song.id);
+  assert.ok(queue.length >= RADIO_MIN_SONGS && queue.length <= 20);
+  assert.deepEqual(ids.slice(0, 6), ['itunes-2', 'itunes-3', 'itunes-4', 'itunes-5', 'itunes-6', 'mood-11']);
+  assert.ok(!ids.includes('itunes-7') && !ids.includes('itunes-8') && !ids.includes('itunes-31') && !ids.includes('mood-0'));
+  assert.equal(new Set(ids).size, ids.length);
+  assert.match(queue.find((song) => song.id === 'mood-1').matchWhy, /happy mood mix/);
+  assert.deepEqual(radioFillQueries(seed), ['artist b', 'artist a Bollywood hits', 'Hindi Bollywood']);
+});
+
+test('styled radio fills only with the same style and never with mood filler', () => {
+  const seed = { id: 'itunes-1', title: 'Navratri Garba', artist: 'Singer', genre: 'Indian Pop' };
+  const track = (id, title) => ({ trackId: id, trackName: title, artistName: `Artist ${id}`, primaryGenreName: 'Indian Pop', previewUrl: `https://example.com/${id}` });
+  const fill = [Array.from({ length: 25 }, (_, i) => track(i + 10, i % 5 === 0 ? `Love Song ${i}` : `Garba ${i}`))];
+  const queue = buildRadioQueue(seed, { fillGroups: fill, moodSongs: [{ id: 'mood', title: 'Mood', artist: 'X', genre: 'Indian Pop' }] });
+  assert.ok(queue.length >= RADIO_MIN_SONGS);
+  assert.ok(queue.every((song) => /Garba/.test(song.title)));
+  assert.ok(radioFillQueries(seed).includes('navratri garba'));
 });
 
 test('visible upcoming queue matches playback order, wraps, and never repeats the current track', () => {

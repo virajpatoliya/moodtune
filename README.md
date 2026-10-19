@@ -84,18 +84,20 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 - Each result has a separate left Play/Pause button to preview without leaving
   search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.
-- Selecting a song from any surface starts song radio based on that playing song,
-  not search history or broad mood queries. Explicit styles such as Garba/Dandiya,
-  Bhajan, Qawwali, Ghazal, and Lo-fi are matched from title/album/genre text.
-  Without a recognized style, candidates must share an artist and, when present,
-  the seed's genre. This intentionally favors fewer relevant previews over an
-  unrelated queue. Style matching cannot identify songs whose metadata gives no
-  indication of their style; it is not audio analysis.
+- Selecting a song from any surface starts song radio that aims for 15–20
+  upcoming previews, filled in priority order: closest matches to the playing
+  song first, then other songs by its artists, then songs in its genre, then the
+  current mood mix, and finally recent-search results that share the genre or an
+  artist. Explicit styles such as Garba/Dandiya, Bhajan, Qawwali, Ghazal, and
+  Lo-fi are matched from title/album/genre text and are filled only with more of
+  the same style (extra style searches), never with mood filler. Each queued song
+  carries the reason it was added. Style matching cannot identify songs whose
+  metadata gives no indication of their style; it is not audio analysis.
 - The queue is rebuilt around each new playing song. Next, shuffle, and autoplay
   follow that pool, excluding already played songs in the current radio session.
   Previous uses actual playback history. Selecting a new song manually starts a
-  new radio session. Loading, empty, timeout, and failure states are explicit;
-  no matches means autoplay stops instead of falling back to a general mix.
+  new radio session. Loading, partial-failure, timeout, and failure states are
+  explicit; if fewer than 15 related previews exist, the queue says so.
   Mood changes still update the separate mood-discovery section.
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`

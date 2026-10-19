@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { buildMoodSuggestions, buildRelatedMix, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
+import { buildMoodSuggestions, buildRadioQueue, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
 import { MOOD_CATALOG } from './moodCatalog.js';
 import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
@@ -666,6 +666,11 @@ export default function App() {
     return [...songs.values()];
   }, [savedSongs, discoveredSongs, suggestedSongs, radioSongs, liveSearchResults, activeSong]);
 
+  const radioContextRef = useRef({ moodSongs: [], searchTerms: [], moodLabel: currentMood });
+  useEffect(() => {
+    radioContextRef.current = { moodSongs: [...discoveredSongs, ...suggestedSongs], searchTerms: searchHistory.terms, moodLabel: currentMood };
+  }, [discoveredSongs, suggestedSongs, searchHistory.terms, currentMood]);
+
   useEffect(() => {
     if (!radioSeed) return;
     const controller = new AbortController();
@@ -673,12 +678,27 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(new Error('Song radio timed out. Please retry.')), 15000);
     async function loadRadio() {
       try {
-        const queries = relatedQueries(radioSeed);
-        const groups = await Promise.all(queries.map((query) => searchMusic(query, controller.signal)));
+        const context = radioContextRef.current;
+        const excludeIds = [...radioPlayedRef.current, ...playbackStateRef.current.dislikedSongIds];
+        const strict = await searchMusicBatch(relatedQueries(radioSeed), controller.signal);
         if (cancelled) return;
-        const songs = buildRelatedMix(groups, radioSeed, { mood: null, intent: null })
-          .filter((song) => !radioPlayedRef.current.has(song.id));
-        setRadio({ key: radioKey, songs, status: 'ready', error: '' });
+        const options = { strictGroups: strict.groups, moodSongs: context.moodSongs, moodLabel: context.moodLabel, excludeIds };
+        let songs = buildRadioQueue(radioSeed, options);
+        let warning = strict.error;
+        if (songs.length < RADIO_MIN_SONGS) {
+          const fillQueries = radioFillQueries(radioSeed);
+          const searchTerms = context.searchTerms.slice(0, 3);
+          const fill = await searchMusicBatch([...fillQueries, ...searchTerms], controller.signal).catch((error) => ({ groups: [], error: error.message }));
+          if (cancelled) return;
+          songs = buildRadioQueue(radioSeed, {
+            ...options,
+            fillGroups: fill.groups.slice(0, fillQueries.length),
+            searchGroups: fill.groups.slice(fillQueries.length),
+            searchTerms,
+          });
+          warning = warning || fill.error;
+        }
+        setRadio({ key: radioKey, songs, status: 'ready', error: warning });
         if (waitingForRadioRef.current) {
           waitingForRadioRef.current = false;
           const latest = playbackStateRef.current;
@@ -961,7 +981,7 @@ export default function App() {
 
   const queueList = useMemo(() => {
     if (!currentSong) return recommendations.madeForMood;
-    const others = upcomingTracks(playbackTracks, currentSong.id).slice(0, 7);
+    const others = upcomingTracks(playbackTracks, currentSong.id).slice(0, 20);
     return [currentSong, ...others];
   }, [currentSong, recommendations, playbackTracks]);
 
@@ -2437,9 +2457,11 @@ export default function App() {
                     <span className="text-xs text-slate-400">{radioSeed ? 'Autoplay' : 'Dynamically adapting'}</span>
                   </div>
                   {radioSeed && <>
-                    <p className="text-xs text-slate-400">Based on the playing song&apos;s style and artist, not search history. Metadata-based suggestions, not audio analysis.</p>
+                    <p className="text-xs text-slate-400">Closest matches to the playing song first (style, artist, genre), then picks from your mood mix and same-genre searches. Metadata-based, not audio analysis.</p>
                     {radioStatus === 'loading' && <p role="status" className="text-xs text-violet-200">Finding similar songs for autoplay...</p>}
                     {radioStatus === 'error' && <div role="alert" className="text-sm text-rose-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry song radio</button></div>}
+                    {radioStatus === 'ready' && radio.error && <div role="alert" className="text-xs text-amber-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry for more songs</button></div>}
+                    {radioStatus === 'ready' && radioSongs.length > 0 && <p role="status" className="text-xs text-emerald-200">{radioSongs.length} songs lined up for autoplay{radioSongs.length < RADIO_MIN_SONGS ? ' — only these related previews were found' : ''}.</p>}
                     {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No more related previews found. Autoplay won&apos;t switch to unrelated songs. Choose another song to continue.</p>}
                   </>}
 

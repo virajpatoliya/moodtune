@@ -131,11 +131,11 @@ export function resolveMoodMix(groups, seeds, { mood, intent }) {
 }
 
 const RADIO_STYLES = [
-  { label: 'Garba / Dandiya', query: 'garba dandiya', pattern: /garba|garbo|garbe|dandiya|navratri|નવરાત્રી|ગરબા|ગરબો|डांडिया|गरबा/i },
-  { label: 'Bhajan', query: 'bhajan', pattern: /bhajan|ભજન|भजन/i },
-  { label: 'Qawwali', query: 'qawwali', pattern: /qawwali|kawwali|कव्वाली/i },
-  { label: 'Ghazal', query: 'ghazal', pattern: /ghazal|gazal|ગઝલ|ग़ज़ल|गजल/i },
-  { label: 'Lo-fi', query: 'lofi', pattern: /\blo[\s-]?fi\b/i },
+  { label: 'Garba / Dandiya', query: 'garba dandiya', fill: ['garba', 'navratri garba', 'dandiya raas', 'gujarati garba', 'garba nonstop'], pattern: /garba|garbo|garbe|dandiya|navratri|નવરાત્રી|ગરબા|ગરબો|डांडिया|गरबा/i },
+  { label: 'Bhajan', query: 'bhajan', fill: ['bhajan', 'krishna bhajan', 'hanuman bhajan', 'shiv bhajan', 'gujarati bhajan'], pattern: /bhajan|ભજન|भजन/i },
+  { label: 'Qawwali', query: 'qawwali', fill: ['qawwali', 'sufi qawwali', 'nusrat fateh ali khan qawwali', 'sabri brothers qawwali'], pattern: /qawwali|kawwali|कव्वाली/i },
+  { label: 'Ghazal', query: 'ghazal', fill: ['ghazal', 'jagjit singh ghazal', 'urdu ghazal', 'ghulam ali ghazal'], pattern: /ghazal|gazal|ગઝલ|ग़ज़ल|गजल/i },
+  { label: 'Lo-fi', query: 'lofi', fill: ['lofi', 'hindi lofi', 'lofi chill', 'bollywood lofi'], pattern: /\blo[\s-]?fi\b/i },
 ];
 
 function radioStyle(song) {
@@ -172,6 +172,62 @@ export function buildRelatedMix(groups, seed, preferences) {
         ? `${style.label} radio from "${seed.title}". Matched using song, album, or genre text; not verified audio analysis.`
         : `Related to "${seed.title}" through a shared artist${genre ? ' and genre' : ''}. Metadata-based suggestions, not verified audio similarity.`,
     }));
+}
+
+export const RADIO_MIN_SONGS = 15;
+export const RADIO_TARGET_SONGS = 20;
+
+export function radioFillQueries(seed) {
+  const style = radioStyle(seed);
+  if (style) return style.fill;
+  const artists = artistNames(seed.artist).filter((artist) => artist !== 'unknown artist');
+  const language = ['Global', 'Surprise', 'Instrumental'].includes(seed.language) ? '' : seed.language;
+  return [...new Set([
+    ...artists.slice(1, 3),
+    seed.genre ? `${artists[0] || ''} ${seed.genre} hits`.trim() : null,
+    seed.genre ? `${language || ''} ${seed.genre}`.trim() : null,
+  ].filter(Boolean))];
+}
+
+export function buildRadioQueue(seed, {
+  strictGroups = [], fillGroups = [], searchGroups = [], searchTerms = [], moodSongs = [],
+  moodLabel = 'mood', excludeIds = [], limit = RADIO_TARGET_SONGS,
+} = {}) {
+  const style = radioStyle(seed);
+  const seedArtists = artistNames(seed.artist).filter((artist) => artist !== 'unknown artist');
+  const genre = seed.genre?.toLowerCase();
+  const excluded = new Set(excludeIds);
+  const sameRecording = (a, b) => recordingTitle(a.title) === recordingTitle(b.title)
+    && recordingArtists(a.artist).some((artist) => recordingArtists(b.artist).includes(artist));
+  const sharesArtist = (song) => seedArtists.some((artist) => artistNames(song.artist).includes(artist));
+  const sameGenre = (song) => Boolean(genre) && song.genre?.toLowerCase() === genre;
+  const queue = [];
+  const add = (songs, why) => {
+    for (const song of songs) {
+      if (queue.length >= limit) return;
+      if (song.id === seed.id || excluded.has(song.id) || sameRecording(song, seed)
+        || queue.some((queued) => queued.id === song.id || sameRecording(queued, song))
+        || /\b(karaoke|tribute|cover|sped up|slowed)\b/i.test(`${song.title} ${song.album || ''}`)
+        || (style ? radioStyle(song)?.label !== style.label : radioStyle(song))) continue;
+      queue.push(why ? { ...song, matchWhy: why(song) } : song);
+    }
+  };
+
+  add(buildRelatedMix(strictGroups, seed, { mood: null, intent: null }));
+  const fetched = buildDiscoveryMix([...strictGroups, ...fillGroups], { mood: null, intent: null, language: 'Global' });
+  if (style) {
+    add(fetched, () => `More ${style.label} to keep "${seed.title}" radio going. Matched using song, album, or genre text; not verified audio analysis.`);
+    return queue;
+  }
+  add(fetched.filter(sharesArtist), () => `Also by an artist from "${seed.title}". Metadata-based suggestion, not verified audio similarity.`);
+  add(fetched.filter(sameGenre), (song) => `Same genre (${song.genre}) as "${seed.title}". Metadata-based suggestion, not verified audio similarity.`);
+  add([...moodSongs.filter(sameGenre), ...moodSongs.filter((song) => !sameGenre(song))],
+    () => `From your ${moodLabel} mood mix, added to keep autoplay going. Mood fit is subjective.`);
+  searchGroups.forEach((group, index) => add(
+    buildDiscoveryMix([group], { mood: null, intent: null, language: 'Global' }).filter((song) => sameGenre(song) || sharesArtist(song)),
+    () => `From your recent search for "${searchTerms[index]}", in the same genre as "${seed.title}". Search-based, not a verified taste prediction.`,
+  ));
+  return queue;
 }
 
 export function moodSuggestionQuery(song) {
