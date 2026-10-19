@@ -345,6 +345,39 @@
 .search-preview-button:hover { background: #ddd6fe; }
 
 @media (max-width: 639px) {
+  .m-rail,
+  .m-rail-rows {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 16px;
+    margin-inline: -16px;
+    padding: 4px 16px 8px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .m-rail::-webkit-scrollbar,
+  .m-rail-rows::-webkit-scrollbar { display: none; }
+  .m-rail {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 10px;
+  }
+  .m-rail > * { flex: 0 0 auto; scroll-snap-align: start; }
+  .m-rail-moods > * { width: 136px; }
+  .m-rail-cards > * { width: 148px; }
+  .m-rail-rows {
+    display: grid !important;
+    grid-template-columns: none !important;
+    grid-template-rows: repeat(3, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: 86%;
+    gap: 8px 10px;
+  }
+  .m-rail-rows > * { min-width: 0; scroll-snap-align: start; }
+}
+
+@media (max-width: 639px) {
   .mood-summary-actions > button:first-child { flex: 1; }
   .mood-summary-actions > button { white-space: nowrap; }
   .mood-summary .mood-spotlight {
