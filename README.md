@@ -81,6 +81,12 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   selections remain available as optional shortcuts. The header and mood card
   avoid duplicate search buttons. The mobile mood card uses concise copy,
   side-by-side playback/settings controls, and a compact spotlight row.
+- On phones (under 640px), the post-quiz home screen uses swipeable rails like a
+  music-app home: Quick Mood Shift (placed just before You Might Also Like, after
+  the songs), listening goals and language chips are single
+  scrollable rows; Made for Your Mood and "Because you liked" scroll sideways in
+  columns of three songs; You Might Also Like is a row of cover cards. Long helper
+  copy is hidden on mobile. Tablet and desktop layouts are unchanged.
 - Each result has a separate left Play/Pause button to preview without leaving
   search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.

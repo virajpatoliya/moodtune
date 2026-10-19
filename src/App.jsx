@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { buildMoodSuggestions, buildRadioQueue, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
 import { MOOD_CATALOG } from './moodCatalog.js';
 import './App.css';
@@ -578,7 +578,20 @@ const SongCoverArt = ({ song, size = 'md', isPlaying = false, realCoverUrl = nul
   );
 };
 
+function useMediaQuery(query) {
+  return useSyncExternalStore(
+    (onChange) => {
+      const media = window.matchMedia(query);
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
+
 export default function App() {
+  const isMobile = useMediaQuery('(max-width: 639px)');
   const [screen, setScreen] = useState('welcome');
   const [quizStep, setQuizStep] = useState(0);
 
@@ -1240,6 +1253,50 @@ export default function App() {
       .filter((s) => activeLangFilter === 'All' || s.language.toLowerCase() === activeLangFilter.toLowerCase());
   }, [recommendations, activeLangFilter]);
 
+  const quickMoodShift = (
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+          <Compass className="w-3.5 h-3.5 text-cyan-400" />
+          Quick Mood Shift
+        </span>
+        <span className="hidden sm:inline text-[11px] text-slate-500">Tap to instantly morph your mix</span>
+        <span className="sm:hidden text-[11px] text-slate-500">Not feeling it? Swipe a new mood</span>
+      </div>
+      <div className="m-rail m-rail-moods grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        {MOOD_PROFILES.map((m) => {
+          const isActive = currentMood === m.id;
+          return (
+            <button
+              key={m.id}
+              aria-pressed={isActive}
+              onClick={() => handleQuickMoodSwitch(m.id)}
+              className={`p-3 rounded-2xl border text-left transition-all flex items-center gap-3 ${
+                isActive
+                  ? `bg-gradient-to-r ${m.cardGradient} text-white border-white/40 shadow-lg scale-[1.02]`
+                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-slate-300'
+              }`}
+            >
+              <div
+                className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  isActive ? 'bg-black/25 text-white' : 'bg-white/10 text-white'
+                }`}
+              >
+                <Music className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-xs truncate">{m.shortLabel.split('&')[0]}</div>
+                <div className={`text-[10px] truncate ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
+                  {m.vibeTag.split(' ')[0]}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-rose-500 selection:text-white relative overflow-x-hidden flex flex-col items-center">
       <audio
@@ -1848,45 +1905,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <Compass className="w-3.5 h-3.5 text-cyan-400" />
-                  Quick Mood Shift
-                </span>
-                <span className="text-[11px] text-slate-500">Tap to instantly morph your mix</span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-                {MOOD_PROFILES.map((m) => {
-                  const isActive = currentMood === m.id;
-                  return (
-                    <button
-                      key={m.id}
-                      onClick={() => handleQuickMoodSwitch(m.id)}
-                      className={`p-3 rounded-2xl border text-left transition-all flex items-center gap-3 ${
-                        isActive
-                          ? `bg-gradient-to-r ${m.cardGradient} text-white border-white/40 shadow-lg scale-[1.02]`
-                          : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-slate-300'
-                      }`}
-                    >
-                      <div
-                        className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                          isActive ? 'bg-black/25 text-white' : 'bg-white/10 text-white'
-                        }`}
-                      >
-                        <Music className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-bold text-xs truncate">{m.shortLabel.split('&')[0]}</div>
-                        <div className={`text-[10px] truncate ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
-                          {m.vibeTag.split(' ')[0]}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {!isMobile && quickMoodShift}
 
             <section className="space-y-3.5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1895,7 +1914,7 @@ export default function App() {
                     <Music className="w-5 h-5 text-amber-400" />
                     <span>Made for Your Mood</span>
                   </h2>
-                  <p className="text-xs text-slate-400">
+                  <p className="hidden sm:block text-xs text-slate-400">
                     Curated for {intentProfile.shortLabel} in {langProfile.badge}, with live iTunes previews. Your listening goal takes priority.
                   </p>
                 </div>
@@ -1917,8 +1936,8 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-1">Take me somewhere</span>
+              <div className="m-rail flex flex-wrap gap-2 items-center">
+                <span className="hidden sm:inline text-[10px] uppercase tracking-widest text-slate-500 mr-1">Take me somewhere</span>
                 {INTENT_PROFILES.map((intent) => <button key={intent.id} aria-pressed={currentIntent === intent.id} onClick={() => setCurrentIntent(intent.id)} className={`search-chip ${currentIntent === intent.id ? '!border-violet-400/60 !bg-violet-500/20 !text-violet-200' : ''}`}>{intent.shortLabel}</button>)}
               </div>
               {discoveryStatus === 'loading' ? (
@@ -1936,7 +1955,7 @@ export default function App() {
                   <button type="button" className="search-chip mt-2" onClick={() => setDiscoveryRevision((value) => value + 1)}>Retry for more picks</button>
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              <div className="m-rail-rows grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 {filteredMadeForMood.map((song) => {
                   const isCurrent = currentSong?.id === song.id;
                   const isLiked = likedSongIds.includes(song.id);
@@ -2021,7 +2040,7 @@ export default function App() {
                   <span className="text-xs text-slate-400">Personalized Mix</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div className="m-rail-rows grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {recommendations.becauseLiked.map((song) => {
                     const isCurrent = currentSong?.id === song.id;
                     const isLiked = likedSongIds.includes(song.id);
@@ -2060,15 +2079,18 @@ export default function App() {
               </section>
             )}
 
+            {isMobile && quickMoodShift}
+
             <section className="space-y-3.5">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg sm:text-xl font-extrabold text-white">You Might Also Like</h2>
-                  <p className="text-xs text-slate-400">
+                  <p className="hidden sm:block text-xs text-slate-400">
                     More from artists in your mood mix. These are artist-related discoveries, not verified mood or language matches.
                   </p>
+                  <p className="sm:hidden text-[11px] text-slate-400">More from artists in your mix · artist-related, not verified mood matches</p>
                 </div>
-                <button type="button" onClick={() => setSuggestionRevision((value) => value + 1)} disabled={discoveryStatus !== 'ready' || !discoveredSongs.length || suggestionStatus === 'loading'} className="search-chip shrink-0 disabled:opacity-40">Refresh suggestions</button>
+                <button type="button" aria-label="Refresh suggestions" onClick={() => setSuggestionRevision((value) => value + 1)} disabled={discoveryStatus !== 'ready' || !discoveredSongs.length || suggestionStatus === 'loading'} className="search-chip shrink-0 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /><span className="hidden sm:inline">Refresh suggestions</span></button>
               </div>
 
               {discoveryStatus === 'loading' || (discoveredSongs.length > 0 && suggestionStatus === 'loading') ? (
@@ -2084,7 +2106,7 @@ export default function App() {
                 <p role="status" className="text-sm text-slate-400">No additional related previews for these artists. Try a fresh mood mix.</p>
               ) : null}
               {suggestionStatus === 'ready' && moodSuggestions.error && <p role="alert" className="text-xs text-amber-200">{moodSuggestions.error}</p>}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 sm:gap-4">
+              <div className="m-rail m-rail-cards grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 sm:gap-4">
                 {recommendations.youMightLike.map((song) => {
                   const isCurrent = currentSong?.id === song.id;
                   const isLiked = likedSongIds.includes(song.id);
