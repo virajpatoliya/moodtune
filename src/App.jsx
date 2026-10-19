@@ -810,6 +810,17 @@ export default function App() {
     const previousFocus = searchReturnFocusRef.current || document.activeElement;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    // Keep the sheet inside the area left visible by the mobile keyboard.
+    function syncViewport() {
+      root.style.setProperty('--search-viewport-height', `${viewport ? viewport.height : window.innerHeight}px`);
+      root.style.setProperty('--search-viewport-top', `${viewport ? viewport.offsetTop : 0}px`);
+    }
+    syncViewport();
+    viewport?.addEventListener('resize', syncViewport);
+    viewport?.addEventListener('scroll', syncViewport);
+    window.addEventListener('resize', syncViewport);
     searchInputRef.current?.focus();
     function onKeyDown(event) {
       if (event.key !== 'Tab') return;
@@ -827,6 +838,11 @@ export default function App() {
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.body.style.overflow = overflow;
+      viewport?.removeEventListener('resize', syncViewport);
+      viewport?.removeEventListener('scroll', syncViewport);
+      window.removeEventListener('resize', syncViewport);
+      root.style.removeProperty('--search-viewport-height');
+      root.style.removeProperty('--search-viewport-top');
       document.removeEventListener('keydown', onKeyDown);
       previousFocus?.focus();
     };
@@ -1301,8 +1317,8 @@ export default function App() {
       )}
 
       {isSearchOpen && (
-        <div className="search-overlay fixed inset-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
-          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl space-y-4 overflow-y-auto">
+        <div className="search-overlay fixed inset-x-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
+          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl flex flex-col gap-4">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] tracking-[0.25em] uppercase text-violet-300 font-bold mb-2">The discovery studio</p>
@@ -1337,6 +1353,10 @@ export default function App() {
               </button>
             </div>
 
+            <div
+              className="search-scroll-area space-y-4"
+              onTouchMove={() => { if (document.activeElement === searchInputRef.current) searchInputRef.current?.blur(); }}
+            >
             {searchHistory.error && <div role="alert" className="text-xs text-amber-200 rounded-xl border border-amber-300/20 p-3">
               <p>{searchHistory.error}</p><button onClick={clearSearchHistory} className="underline mt-2">Clear history</button>
             </div>}
@@ -1421,8 +1441,16 @@ export default function App() {
             ) : searchQuery.trim() ? (
               <div className="py-8 text-center"><Music className="w-8 h-8 text-violet-300 mx-auto mb-3" /><p className="font-semibold">A different sound is out there.</p><p className="text-xs text-slate-400 mt-2">No previews found. Try an artist name or a shorter search.</p></div>
             ) : null}
+            </div>
           </div>
         </div>
+      )}
+
+      {!isMoodModalOpen && !isSearchOpen && !isFullPlayerOpen && (
+        <div
+          aria-hidden="true"
+          className={`bottom-dock-backdrop ${(screen === 'home' || activeSong) && currentSong && isPlayerVisible ? 'bottom-dock-backdrop-tall' : ''}`}
+        />
       )}
 
       {!isMoodModalOpen && <button
@@ -2100,7 +2128,7 @@ export default function App() {
 
       {(screen === 'home' || activeSong) && currentSong && isPlayerVisible && (
         <div className="fixed bottom-0 inset-x-0 z-30 flex justify-center px-3 pb-3 pointer-events-none transition-all duration-300">
-          <div className="pointer-events-auto w-full max-w-5xl rounded-3xl bg-slate-900/95 border border-white/15 shadow-2xl backdrop-blur-2xl px-4 py-3">
+          <div className="pointer-events-auto w-full max-w-5xl rounded-3xl bg-slate-900/80 border border-white/15 shadow-2xl backdrop-blur-2xl px-4 py-3">
             <div className="flex items-center gap-2.5 mb-2.5">
               <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
                 {formatDuration(progressSec)}
