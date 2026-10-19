@@ -197,12 +197,52 @@
 
 .search-studio {
   background: radial-gradient(ellipse at top right, #6d28d933, transparent 65%), #101021;
-  max-height: 90dvh;
+  max-height: min(90dvh, calc(var(--search-viewport-height, 100dvh) - 8px));
+  min-height: 0;
   padding-bottom: max(20px, env(safe-area-inset-bottom));
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
-.search-overlay { z-index: 70; }
+.search-studio > :not(.search-scroll-area) { flex-shrink: 0; }
+
+.search-scroll-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  margin-right: -6px;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #8b5cf660 transparent;
+}
+
+.search-overlay {
+  z-index: 70;
+  top: var(--search-viewport-top, 0px);
+  height: var(--search-viewport-height, 100dvh);
+}
+
+.bottom-dock-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(96px + env(safe-area-inset-bottom));
+  pointer-events: none;
+  background: linear-gradient(to top, #0b0716cc, #0b071680 55%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-mask-image: linear-gradient(to top, #000 62%, transparent);
+  mask-image: linear-gradient(to top, #000 62%, transparent);
+}
+
+.bottom-dock-backdrop-tall { height: calc(220px + env(safe-area-inset-bottom)); }
+
+@media (max-width: 639px) {
+  .bottom-dock-backdrop-tall { height: calc(236px + env(safe-area-inset-bottom)); }
+}
 
 .taste-shelf {
   display: flex;
@@ -263,7 +303,8 @@
   padding: 8px 16px 8px 8px;
   border: 1px solid #c4b5fd65;
   border-radius: 999px;
-  background: #201733f5;
+  background: #201733e0;
+  -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   box-shadow: 0 8px 32px #0008;
   font-size: 13px;

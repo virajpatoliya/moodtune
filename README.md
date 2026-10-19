@@ -75,6 +75,8 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   not an AI taste profile; loading, empty, timeout, and error states are explicit.
 - A floating search bar stays within reach while scrolling, above the mini-player
   or inside the full-player view. On mobile, search opens as a bottom sheet.
+  The sheet resizes for the on-screen keyboard and results scroll independently;
+  a soft frosted layer blurs the page behind the search bar and mini-player.
   Each opening starts with an empty search field and no stale results; recent
   selections remain available as optional shortcuts. The header and mood card
   avoid duplicate search buttons. The mobile mood card uses concise copy,
