@@ -13,8 +13,29 @@ in a violet-to-pink gradient. The same scalable asset, `public/moodtune.svg`,
 appears in the header, vinyl illustration, and browser favicon.
 The project folder is `moodtune`.
 
-Online search, artwork, and song previews require an internet connection and
-use the iTunes Search API (India storefront). Previews are short clips, not full songs.
+MoodTune plays **full songs only — no 30-second previews**, and needs no API keys.
+
+- **Search, Made for Your Mood, You Might Also Like and song radio** use full songs
+  from JioSaavn through the open-source
+  [jiosaavn-api](https://github.com/sumitkolhe/jiosaavn-api) project's public
+  instance (`src/saavn.js`). It returns direct AAC streams that play in MoodTune's
+  own audio player, so every result can be played in full: no embeds, no ads.
+  - Search ranks how much of your query matches the title/artist, then popularity;
+    karaoke, covers and remixes sink unless you ask for them. Artist searches lead
+    with that artist's most popular songs.
+  - Made for Your Mood picks JioSaavn mood playlists for your mood, goal and
+    language (e.g. "romantic hindi", "chill instrumental"); "Find a fresh mix"
+    rotates playlists. You Might Also Like shows popular songs by the mix's artists.
+  - Song radio mixes the artist's popular songs, the song's album and mood
+    playlists for 15–20 full songs.
+- **[Audius](https://audius.co)** (open, artist-owned, keyless API, `src/openMusic.js`)
+  is the fallback: its independent-artist results appear under "Open music" in search,
+  fill radio queues that are short, and power the mood row if JioSaavn is unavailable.
+
+Caveats: the JioSaavn catalog is strongest for Indian music; some international label
+catalogs (e.g. Ed Sheeran) are missing, so only covers show for those. The public
+jiosaavn-api instance is community-run and can be down; Audius results still show.
+The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Firefox.
 
 ## Live discovery
 
@@ -57,7 +78,7 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 - Likes and early skips adjust the current mix. Saved track details remain available
   for the current session, even after switching mixes. An already playing track
   continues when preferences change; choose a new track to change playback.
-- Search has debounced live results, preview-ready tracks, retry, recent selections
+- Search has debounced live results, full-song tracks, retry, recent selections
   saved on this device, keyboard focus containment, and Escape-to-close.
 - Search history keeps the last 10 unique terms in this browser's local storage,
   newest first. A term is saved when you press Enter, select/preview a result, or
@@ -92,11 +113,11 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   panel before leaving the site. Closing an overlay with its X uses the same history
   entry, and opening the player from search replaces the search entry so Back does
   not reopen search. Navigation is kept in memory; the URL does not change.
-- Each result has a separate left Play/Pause button to preview without leaving
-  search. Tapping the artwork, title, or rest of the result opens the full player
+- Each result has a separate left Play/Pause button that plays the full song without
+  leaving search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.
 - Selecting a song from any surface starts song radio that aims for 15–20
-  upcoming previews, filled in priority order: closest matches to the playing
+  upcoming full songs, filled in priority order: closest matches to the playing
   song first, then other songs by its artists, then songs in its genre, then the
   current mood mix, and finally recent-search results that share the genre or an
   artist. Explicit styles such as Garba/Dandiya, Bhajan, Qawwali, Ghazal, and
@@ -121,6 +142,7 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
 (or prefix with `npm exec --yes --package=node@22 --` on older Node).
+Run open-music tests with `node --test src/openMusic.test.js`.
 Run history tests with `node --test src/searchHistory.test.js` and volume tests
 with `node --test src/volume.test.js`.
 
