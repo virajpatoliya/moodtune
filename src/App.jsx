@@ -5,6 +5,8 @@ import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
 import { planHistoryUpdate } from './appHistory.js';
+import VolumeControl, { VolumeIcon } from './VolumeControl.jsx';
+import { canSetVolume, MOOD_ACCENTS, readVolume, saveVolume, setLevel, toGain, toggleMute, VOLUME_STEP } from './volume.js';
 import {
   Play,
   Pause,
@@ -16,7 +18,6 @@ import {
   Music,
   Sliders,
   Volume2,
-  VolumeX,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
@@ -29,8 +30,6 @@ import {
   Repeat,
   Shuffle,
   Clock,
-  Activity,
-  Layers,
   ArrowRight
 } from 'lucide-react';
 
@@ -634,7 +633,9 @@ export default function App() {
   const [isPlayerVisible, setIsPlayerVisible] = useState(true);
   const [progressSec, setProgressSec] = useState(0);
   const [trackDuration, setTrackDuration] = useState(30);
-  const [isMuted, setIsMuted] = useState(false);
+  const [volumeState, setVolumeState] = useState(() => readVolume());
+  const [volumeSupported] = useState(() => typeof Audio === 'undefined' || canSetVolume());
+  const isMuted = volumeState.muted || volumeState.level === 0;
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
   const [isFullPlayerOpen, setIsFullPlayerOpen] = useState(false);
@@ -904,6 +905,7 @@ export default function App() {
     () => MOOD_PROFILES.find((m) => m.id === currentMood) || MOOD_PROFILES[1],
     [currentMood]
   );
+  const volumeAccent = MOOD_ACCENTS[moodProfile.id] || MOOD_ACCENTS.calm;
   const intentProfile = useMemo(
     () => INTENT_PROFILES.find((i) => i.id === currentIntent) || INTENT_PROFILES[2],
     [currentIntent]
@@ -1014,8 +1016,6 @@ export default function App() {
       el.src = songUrl;
       el.load();
     }
-    el.muted = isMuted;
-
     if (isPlaying) {
       const playPromise = el.play();
       if (playPromise !== undefined) {
@@ -1024,7 +1024,45 @@ export default function App() {
     } else {
       el.pause();
     }
-  }, [songUrl, currentSongId, activeSong, isPlaying, isMuted, handlePlaybackError]);
+  }, [songUrl, currentSongId, activeSong, isPlaying, handlePlaybackError]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.muted = isMuted;
+    if (volumeSupported) el.volume = toGain(volumeState.level);
+  }, [isMuted, volumeState.level, volumeSupported]);
+
+  useEffect(() => {
+    saveVolume(volumeState);
+  }, [volumeState]);
+
+  const handleVolumeChange = useCallback((value) => {
+    setVolumeState((prev) => setLevel(prev, value));
+  }, []);
+
+  const handleToggleMute = useCallback(() => {
+    setVolumeState(toggleMute);
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      if (target?.closest?.('input:not([type="range"]), textarea, select, [contenteditable="true"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 'm') {
+        event.preventDefault();
+        handleToggleMute();
+      } else if (volumeSupported && (event.key === ']' || event.key === '[')) {
+        event.preventDefault();
+        const delta = event.key === ']' ? VOLUME_STEP : -VOLUME_STEP;
+        setVolumeState((prev) => setLevel(prev, (prev.muted ? 0 : prev.level) + delta));
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleToggleMute, volumeSupported]);
 
   const rememberSearch = useCallback(() => {
     if (!searchQuery.trim()) return;
@@ -1416,16 +1454,17 @@ export default function App() {
           )}
 
           <button
-            onClick={() => setIsMuted((prev) => !prev)}
+            onClick={handleToggleMute}
             className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-full border transition text-xs ${
               !isMuted
                 ? 'bg-white/10 border-white/15 text-white'
                 : 'bg-white/5 border-white/10 text-slate-400'
             }`}
-            title="Toggle Mute"
+            title={`${isMuted ? 'Unmute' : 'Mute'} (M)`}
+            aria-label={isMuted ? 'Unmute' : 'Mute'}
           >
-            {!isMuted ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />}
-            <span className="hidden md:inline">{!isMuted ? 'Sound On' : 'Muted'}</span>
+            <VolumeIcon level={volumeState.level} muted={isMuted} className={`w-3.5 h-3.5 ${isMuted ? '' : 'text-emerald-400'}`} />
+            <span className="hidden md:inline">{isMuted ? 'Muted' : volumeSupported ? `Sound ${Math.round(volumeState.level * 100)}%` : 'Sound On'}</span>
           </button>
 
           {screen === 'home' && (
@@ -2271,7 +2310,7 @@ export default function App() {
                   </div>
                   <p className="text-[11px] text-slate-400 truncate">
                     {currentSong.artist} •{' '}
-                    <span className="text-amber-300/90">Tap for &ldquo;Why this song?&rdquo; & Queue</span>
+                    <span className="text-amber-300/90">Tap for queue & volume</span>
                   </p>
                 </div>
               </div>
@@ -2319,6 +2358,18 @@ export default function App() {
                   <SkipForward className="w-4 h-4" />
                 </button>
 
+                <div className="hidden sm:flex">
+                  <VolumeControl
+                    variant="compact"
+                    level={volumeState.level}
+                    muted={isMuted}
+                    supported={volumeSupported}
+                    accent={volumeAccent}
+                    onChange={handleVolumeChange}
+                    onToggleMute={handleToggleMute}
+                  />
+                </div>
+
                 <button
                   onClick={() => setIsFullPlayerOpen(true)}
                   className="hidden sm:inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-white transition"
@@ -2362,15 +2413,16 @@ export default function App() {
               </div>
 
               <button
-                onClick={() => setIsMuted((prev) => !prev)}
+                onClick={handleToggleMute}
                 className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl border text-xs font-medium transition ${
                   !isMuted
                     ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
                     : 'bg-white/5 border-white/10 text-slate-400'
                 }`}
+                aria-label={isMuted ? 'Unmute' : 'Mute'}
               >
-                {!isMuted ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                <span>{!isMuted ? 'Sound On' : 'Muted'}</span>
+                <VolumeIcon level={volumeState.level} muted={isMuted} className="w-4 h-4" />
+                <span className="hidden sm:inline">{isMuted ? 'Muted' : 'Sound On'}</span>
               </button>
             </div>
 
@@ -2460,7 +2512,8 @@ export default function App() {
 
                   <button
                     onClick={handleTogglePlay}
-                    className={`w-16 h-16 rounded-3xl bg-gradient-to-r ${moodProfile.cardGradient} text-white flex items-center justify-center shadow-2xl hover:scale-105 transition`}
+                    className={`play-glow w-16 h-16 rounded-3xl bg-gradient-to-r ${moodProfile.cardGradient} text-white flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition ${isPlaying ? 'is-playing' : ''}`}
+                    style={{ '--glow': volumeAccent[0] }}
                     title={isPlaying ? 'Pause' : 'Play'}
                   >
                     {isPlaying ? (
@@ -2491,42 +2544,6 @@ export default function App() {
               </div>
 
               <div className="lg:col-span-6 space-y-5">
-                <div className="rounded-3xl bg-white/[0.05] border border-white/15 p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-300">
-                      <Sparkles className="w-4 h-4" />
-                      Why This Song Was Picked For You
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-200 leading-relaxed">
-                    {currentSong.matchWhy || currentSong.baseReason}
-                  </p>
-
-                  <div className="pt-2 grid grid-cols-3 gap-2 text-center">
-                    <div className="p-2 rounded-xl bg-white/5 border border-white/10">
-                      <div className="text-[10px] uppercase text-slate-400 flex items-center justify-center gap-1">
-                        <Activity className="w-3 h-3 text-emerald-400" />
-                        Energy
-                      </div>
-                      <div className="text-xs font-bold text-white mt-0.5">{currentSong.energy ? `${currentSong.energy}%` : 'Not measured'}</div>
-                    </div>
-                    <div className="p-2 rounded-xl bg-white/5 border border-white/10">
-                      <div className="text-[10px] uppercase text-slate-400 flex items-center justify-center gap-1">
-                        <Clock className="w-3 h-3 text-amber-400" />
-                        Tempo
-                      </div>
-                      <div className="text-xs font-bold text-white mt-0.5">{currentSong.bpm ? `${currentSong.bpm} BPM` : 'Not measured'}</div>
-                    </div>
-                    <div className="p-2 rounded-xl bg-white/5 border border-white/10">
-                      <div className="text-[10px] uppercase text-slate-400 flex items-center justify-center gap-1">
-                        <Layers className="w-3 h-3 text-cyan-400" />
-                        Language
-                      </div>
-                      <div className="text-xs font-bold text-white mt-0.5 truncate">{currentSong.language}</div>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="rounded-3xl bg-white/[0.03] border border-white/10 p-5 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -2588,6 +2605,15 @@ export default function App() {
                     })}
                   </div>
                 </div>
+
+                <VolumeControl
+                  level={volumeState.level}
+                  muted={isMuted}
+                  supported={volumeSupported}
+                  accent={volumeAccent}
+                  onChange={handleVolumeChange}
+                  onToggleMute={handleToggleMute}
+                />
               </div>
             </div>
           </div>
