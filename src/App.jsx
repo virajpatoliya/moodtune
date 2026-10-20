@@ -145,6 +145,9 @@ const LANGUAGE_PROFILES = [
   { id: 'Surprise', label: 'Surprise me / Multilingual mix', badge: 'Multilingual', sub: 'A blend across languages, curated for your listening goal' }
 ];
 
+const LANGUAGE_CHIPS = ['All', 'Hindi', 'English', 'Gujarati', 'Punjabi', 'Instrumental'];
+const languageChip = (language) => (LANGUAGE_CHIPS.includes(language) ? language : 'All');
+
 const PUBLIC_FALLBACK_AUDIO = {
   chill: 'https://codeskulptor-demos.commondatastorage.googleapis.com/descent/background%20music.mp3',
   upbeat: 'https://codeskulptor-demos.commondatastorage.googleapis.com/pang/paza-moduless.mp3',
@@ -661,7 +664,7 @@ export default function App() {
   const radioPlayedRef = useRef(new Set());
   const playbackStateRef = useRef({ activeSong, dislikedSongIds });
   useEffect(() => { playbackStateRef.current = { activeSong, dislikedSongIds }; }, [activeSong, dislikedSongIds]);
-  const discoveryLanguage = activeLangFilter === 'All' ? currentLanguage : activeLangFilter;
+  const discoveryLanguage = activeLangFilter;
   const preferenceKey = `${currentMood}:${currentIntent}:${discoveryLanguage}`;
   const discoveryKey = `${currentMood}:${currentIntent}:${discoveryLanguage}:${discoveryRevision}`;
   const discoveryEnabled = !['welcome', 'quiz', 'analyzing'].includes(screen);
@@ -1284,7 +1287,7 @@ export default function App() {
 
   const finishQuizWithLang = (langChoice) => {
     setCurrentLanguage(langChoice);
-    setActiveLangFilter('All');
+    setActiveLangFilter(languageChip(langChoice));
     setScreen('analyzing');
     clearTimeout(analyzingTimeoutRef.current);
     analyzingTimeoutRef.current = setTimeout(() => {
@@ -1358,10 +1361,8 @@ export default function App() {
     return 'Good evening';
   }, []);
 
-  const filteredMadeForMood = useMemo(() => {
-    return recommendations.madeForMood
-      .filter((s) => activeLangFilter === 'All' || s.language.toLowerCase() === activeLangFilter.toLowerCase());
-  }, [recommendations, activeLangFilter]);
+  // Songs are already fetched for the selected language chip.
+  const filteredMadeForMood = recommendations.madeForMood;
 
   const quickMoodShift = (
     <div className="space-y-2.5">
@@ -2036,6 +2037,22 @@ export default function App() {
                   </p>
                 </div>
 
+                <div role="group" aria-label="Song language" className="m-rail flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                  {LANGUAGE_CHIPS.map((lang) => (
+                    <button
+                      key={lang}
+                      aria-pressed={activeLangFilter === lang}
+                      onClick={() => setActiveLangFilter(lang)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition flex-shrink-0 ${
+                        activeLangFilter === lang
+                          ? 'bg-white text-slate-950 shadow-md'
+                          : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10'
+                      }`}
+                    >
+                      {lang}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="m-rail flex flex-wrap gap-2 items-center">
@@ -2697,7 +2714,7 @@ export default function App() {
                     key={lang.id}
                     onClick={() => {
                       setCurrentLanguage(lang.id);
-                      setActiveLangFilter('All');
+                      setActiveLangFilter(languageChip(lang.id));
                     }}
                     className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition ${
                       currentLanguage === lang.id

@@ -97,24 +97,59 @@ test('search still works when the artist lookup fails, and errors when everythin
   await assert.rejects(searchSaavn('kesariya', undefined, {}, down), /busy right now/);
 });
 
-test('builds mood playlist queries from mood, goal and language', () => {
-  assert.deepEqual(moodPlaylistQueries({ mood: 'romantic', intent: 'match', language: 'Hindi' }), ['romantic hindi']);
-  assert.deepEqual(moodPlaylistQueries({ mood: 'sad', intent: 'uplift', language: 'Punjabi' }), ['happy punjabi']);
-  assert.deepEqual(moodPlaylistQueries({ mood: 'calm', language: 'Instrumental' }), ['chill instrumental']);
-  assert.deepEqual(moodPlaylistQueries({ mood: 'happy', language: 'Surprise' }), ['happy hindi', 'happy english']);
+test('builds ordered mood playlist queries per language', () => {
+  assert.deepEqual(moodPlaylistQueries({ mood: 'romantic', intent: 'match', language: 'Hindi' }), [['hindi romantic', 'hindi love', 'hindi hits']]);
+  assert.deepEqual(moodPlaylistQueries({ mood: 'sad', intent: 'uplift', language: 'Punjabi' })[0].slice(0, 2), ['punjabi happy', 'punjabi party']);
+  assert.equal(moodPlaylistQueries({ mood: 'calm', language: 'Instrumental' })[0][0], 'instrumental chill');
+  assert.equal(moodPlaylistQueries({ mood: 'happy', language: 'Surprise' }).length, 2);
+  assert.deepEqual(moodPlaylistQueries({ mood: 'romantic', language: 'All' }).map((queries) => queries[0]), ['hindi romantic', 'english romantic', 'punjabi romantic', 'gujarati romantic']);
+});
+
+test('mood mix skips empty and other-language playlists and falls back to other words', async () => {
+  const songs = (prefix) => Array.from({ length: 10 }, (_, i) => raw(`${prefix}${i}`, `${prefix} Song ${i}`, `${prefix} Artist ${i}`, { language: 'gujarati' }));
+  const { fetcher } = fakeFetcher([
+    [(path, params) => path === '/search/playlists' && params.get('query') === 'gujarati chill', () => ({ results: [] })],
+    [(path, params) => path === '/search/playlists' && params.get('query') === 'gujarati lofi', () => ({ results: [{ id: 'h', name: 'Lofi Hindi', language: 'hindi', url: 'https://jiosaavn.com/featured/h' }] })],
+    [(path) => path === '/search/playlists', () => ({ results: [
+      { id: 'e', name: 'Empty - Gujarati', language: 'gujarati', url: 'https://jiosaavn.com/featured/e' },
+      { id: 'g1', name: 'Gujarati Superhits', language: 'gujarati', url: 'https://jiosaavn.com/featured/g1' },
+      { id: 'g2', name: 'Romantic Hits - Gujarati', language: 'gujarati', url: 'https://jiosaavn.com/featured/g2' },
+    ] })],
+    [(path) => path === '/playlists', (params) => ({ songs: params.get('link').endsWith('/e') ? [] : songs(params.get('link').slice(-2)) })],
+  ]);
+  const mix = await fetchSaavnMoodMix({ mood: 'calm', intent: 'match', language: 'Gujarati' }, 0, undefined, { fetcher });
+  assert.equal(mix.length, 12);
+  assert.ok(mix.every((song) => song.language === 'Gujarati'));
+  assert.ok(mix.every((song) => !song.baseReason.includes('Hindi')));
+});
+
+test('mood mix tops up near-empty playlists with a same-language song search', async () => {
+  const { fetcher, calls } = fakeFetcher([
+    [(path) => path === '/search/playlists', () => ({ results: [{ id: 'e', name: 'English 1980s', language: 'english', url: 'https://jiosaavn.com/featured/e' }] })],
+    [(path) => path === '/playlists', () => ({ songs: [raw('odd', 'Udi Baba', 'Asha Bhosle', { language: 'english' })] })],
+    [(path) => path === '/search/songs', () => ({ results: [
+      ...Array.from({ length: 14 }, (_, i) => raw(`en${i}`, `Calm Song ${i}`, `Singer ${i}`, { language: 'english', playCount: i })),
+      raw('hi', 'Hindi Song', 'Someone', { language: 'hindi', playCount: 999 }),
+    ] })],
+  ]);
+  const mix = await fetchSaavnMoodMix({ mood: 'calm', intent: 'match', language: 'English' }, 0, undefined, { fetcher });
+  assert.equal(mix.length, 12);
+  assert.ok(mix.every((song) => song.language === 'English'));
+  assert.ok(calls.some((url) => url.includes('/search/songs') && url.includes('english')));
+  assert.equal(mix.find((song) => song.saavnId.startsWith('en')).saavnId, 'en13');
 });
 
 test('mood mix fills 12 full songs from mood playlists and rotates on refresh', async () => {
   const playlistSongs = (prefix) => Array.from({ length: 15 }, (_, i) => raw(`${prefix}${i}`, `${prefix} Song ${i}`, `${prefix} Artist ${i}`));
   const { fetcher, calls } = fakeFetcher([
-    [(path) => path === '/search/playlists', () => ({ results: [{ id: '1', name: 'Romantic Hits', url: 'https://jiosaavn.com/featured/a' }, { id: '2', name: '2000s Romantic', url: 'https://jiosaavn.com/featured/b' }] })],
+    [(path) => path === '/search/playlists', () => ({ results: [{ id: '1', name: 'Romantic Hits', language: 'hindi', url: 'https://jiosaavn.com/featured/a' }, { id: '2', name: '2000s Romantic', language: 'hindi', url: 'https://jiosaavn.com/featured/b' }] })],
     [(path) => path === '/playlists', (params) => ({ songs: playlistSongs(params.get('link').endsWith('/a') ? 'A' : 'B') })],
   ]);
   const first = await fetchSaavnMoodMix({ mood: 'romantic', intent: 'match', language: 'Hindi' }, 0, undefined, { fetcher });
   assert.equal(first.length, 12);
   assert.ok(first.every((song) => song.fullTrack && song.resolvedAudioUrl));
   assert.match(first[0].baseReason, /Romantic Hits/);
-  assert.ok(calls.some((url) => url.includes('query=romantic+hindi')));
+  assert.ok(calls.some((url) => url.includes('query=hindi+romantic')));
   const refreshed = await fetchSaavnMoodMix({ mood: 'romantic', intent: 'match', language: 'Hindi' }, 1, undefined, { fetcher });
   assert.notDeepEqual(refreshed.map((song) => song.id), first.map((song) => song.id));
 });
@@ -134,7 +169,7 @@ test('song radio queues 15+ full songs and never repeats the seed', async () => 
   const list = (prefix, n) => Array.from({ length: n }, (_, i) => raw(`${prefix}${i}`, `${prefix} Track ${i}`, `${prefix} Singer`, { artistId: prefix }));
   const { fetcher } = fakeFetcher([
     [(path) => path === '/artists/arijit/songs', (params) => ({ songs: [raw('seed', 'Tum Hi Ho', 'Arijit Singh'), ...list(`art${params.get('page')}-`, 8)] })],
-    [(path) => path === '/search/playlists', () => ({ results: [{ id: 'p', name: 'Romantic Hits', url: 'https://jiosaavn.com/featured/p' }] })],
+    [(path) => path === '/search/playlists', () => ({ results: [{ id: 'p', name: 'Romantic Hits', language: 'hindi', url: 'https://jiosaavn.com/featured/p' }] })],
     [(path) => path === '/playlists', () => ({ songs: list('pl', 12) })],
     [(path) => path === '/albums', () => ({ songs: [raw('seed2', 'Tum Hi Ho', 'Arijit Singh'), ...list('alb', 4)] })],
   ]);

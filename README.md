@@ -24,8 +24,13 @@ MoodTune plays **full songs only — no 30-second previews**, and needs no API k
     karaoke, covers and remixes sink unless you ask for them. Artist searches lead
     with that artist's most popular songs.
   - Made for Your Mood picks JioSaavn mood playlists for your mood, goal and
-    language (e.g. "romantic hindi", "chill instrumental"); "Find a fresh mix"
-    rotates playlists. You Might Also Like shows popular songs by the mix's artists.
+    language (e.g. "hindi romantic", "instrumental chill"); "Find a fresh mix"
+    rotates playlists. Empty or other-language playlists are skipped, and languages
+    with thin playlists (like English) are topped up with a mood-word song search.
+    The language chips next to the heading (All, Hindi, English, Gujarati, Punjabi,
+    Instrumental) switch the row instantly; "All" mixes Hindi, English, Punjabi and
+    Gujarati, and the quiz's language answer is pre-selected.
+    You Might Also Like shows popular songs by the mix's artists.
   - Song radio mixes the artist's popular songs, the song's album and mood
     playlists for 15–20 full songs.
 - **[Audius](https://audius.co)** (open, artist-owned, keyless API, `src/openMusic.js`)
