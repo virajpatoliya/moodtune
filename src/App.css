@@ -854,3 +854,15 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .play-glow.is-playing { animation: none; }
 }
+
+.open-music-badge {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(90deg, #7e1bcc, #cc0fe0);
+  box-shadow: 0 4px 14px -4px #cc0fe0;
+}

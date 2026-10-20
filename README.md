@@ -13,8 +13,31 @@ in a violet-to-pink gradient. The same scalable asset, `public/moodtune.svg`,
 appears in the header, vinyl illustration, and browser favicon.
 The project folder is `moodtune`.
 
-Online search, artwork, and song previews require an internet connection and
-use the iTunes Search API (India storefront). Previews are short clips, not full songs.
+MoodTune plays **full songs only — no 30-second previews**, and needs no API keys.
+
+- **Search (songs or artists)** finds full songs on YouTube Music through public
+  instances of the open-source [Piped](https://github.com/TeamPiped/Piped) and
+  [Invidious](https://github.com/iv-org/invidious) front-ends (`src/youtube.js`).
+  Instances are tried in turn, the last working one is remembered, and results are
+  cached for six hours. Live streams, shorts and videos over 15 minutes are skipped.
+- **Playback** uses YouTube's official embedded IFrame player. YouTube requires the
+  player to stay visible, so a small video tile sits above the mini-player and the
+  video replaces the cover art in the full player. If an upload blocks embedding,
+  MoodTune looks for another upload of the same song, otherwise it skips ahead.
+- **Mood rows, You Might Also Like and autoplay fill** use full tracks from
+  [Audius](https://audius.co), an open, artist-owned platform with a keyless public
+  API (`src/openMusic.js`). Mood rows use the mood tag the artist chose (e.g. Calm →
+  Peaceful, Easygoing). Gated or unstreamable tracks, re-uploads and mixes over
+  15 minutes are skipped. The Audius catalog is mostly independent artists.
+- Search shows "Full songs · YouTube" and "Open music · Audius" groups together; if
+  the public YouTube instances are busy, the Audius results still show.
+- Playing a YouTube song starts a radio of 15+ songs from the same artist and similar
+  songs, topped up from Audius. Playing an Audius song starts an Audius radio: more
+  from that artist, then the same genre and mood, then the same mood tag.
+
+Caveats: public Piped/Invidious instances are community-run and can be down at times;
+YouTube may show ads; YouTube embeds do not play from `127.0.0.1` (use `localhost`);
+on phones playback pauses when the browser is backgrounded and iOS ignores in-app volume.
 
 ## Live discovery
 
@@ -57,7 +80,7 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 - Likes and early skips adjust the current mix. Saved track details remain available
   for the current session, even after switching mixes. An already playing track
   continues when preferences change; choose a new track to change playback.
-- Search has debounced live results, preview-ready tracks, retry, recent selections
+- Search has debounced live results, full-song tracks, retry, recent selections
   saved on this device, keyboard focus containment, and Escape-to-close.
 - Search history keeps the last 10 unique terms in this browser's local storage,
   newest first. A term is saved when you press Enter, select/preview a result, or
@@ -92,11 +115,11 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   panel before leaving the site. Closing an overlay with its X uses the same history
   entry, and opening the player from search replaces the search entry so Back does
   not reopen search. Navigation is kept in memory; the URL does not change.
-- Each result has a separate left Play/Pause button to preview without leaving
-  search. Tapping the artwork, title, or rest of the result opens the full player
+- Each result has a separate left Play/Pause button that plays the full song without
+  leaving search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.
 - Selecting a song from any surface starts song radio that aims for 15–20
-  upcoming previews, filled in priority order: closest matches to the playing
+  upcoming full songs, filled in priority order: closest matches to the playing
   song first, then other songs by its artists, then songs in its genre, then the
   current mood mix, and finally recent-search results that share the genre or an
   artist. Explicit styles such as Garba/Dandiya, Bhajan, Qawwali, Ghazal, and
@@ -121,6 +144,7 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
 (or prefix with `npm exec --yes --package=node@22 --` on older Node).
+Run open-music tests with `node --test src/openMusic.test.js`.
 Run history tests with `node --test src/searchHistory.test.js` and volume tests
 with `node --test src/volume.test.js`.
 

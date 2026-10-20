@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, useSyncExternalStore } from 'react';
-import { buildMoodSuggestions, buildRadioQueue, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
-import { MOOD_CATALOG } from './moodCatalog.js';
+import { discoveryQueries, prioritizeFreshSongs, RADIO_MIN_SONGS, upcomingTracks } from './musicDiscovery';
+import { fetchOpenMoodMix, fetchOpenRadio, fetchOpenSuggestions, searchOpenMusic } from './openMusic.js';
+import { fetchSaavnMoodMix, fetchSaavnRadio, fetchSaavnSuggestions, searchSaavn } from './saavn.js';
 import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
@@ -603,6 +604,7 @@ export default function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [liveSearchResults, setLiveSearchResults] = useState([]);
+  const [openSearchResults, setOpenSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchRevision, setSearchRevision] = useState(0);
@@ -676,18 +678,19 @@ export default function App() {
     quizPanelRef.current?.scrollIntoView({ block: 'start' });
     quizPanelRef.current?.focus({ preventScroll: true });
   }, [screen, quizStep]);
+
   const radioKey = `${radioSeed?.id}:${radioRevision}`;
   const radioStatus = radio.key === radioKey ? radio.status : 'loading';
   const radioSongs = useMemo(() => radio.key === radioKey ? radio.songs : [], [radio, radioKey]);
   const songCatalog = useMemo(() => {
-    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...suggestedSongs, ...radioSongs, ...liveSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
+    const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...suggestedSongs, ...radioSongs, ...liveSearchResults, ...openSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
     return [...songs.values()];
-  }, [savedSongs, discoveredSongs, suggestedSongs, radioSongs, liveSearchResults, activeSong]);
+  }, [savedSongs, discoveredSongs, suggestedSongs, radioSongs, liveSearchResults, openSearchResults, activeSong]);
 
   const radioContextRef = useRef({ moodSongs: [], searchTerms: [], moodLabel: currentMood });
   useEffect(() => {
-    radioContextRef.current = { moodSongs: [...discoveredSongs, ...suggestedSongs], searchTerms: searchHistory.terms, moodLabel: currentMood };
-  }, [discoveredSongs, suggestedSongs, searchHistory.terms, currentMood]);
+    radioContextRef.current = { moodSongs: [...discoveredSongs, ...suggestedSongs], searchTerms: searchHistory.terms, moodLabel: currentMood, intent: currentIntent, language: discoveryLanguage };
+  }, [discoveredSongs, suggestedSongs, searchHistory.terms, currentMood, currentIntent, discoveryLanguage]);
 
   useEffect(() => {
     if (!radioSeed) return;
@@ -698,23 +701,19 @@ export default function App() {
       try {
         const context = radioContextRef.current;
         const excludeIds = [...radioPlayedRef.current, ...playbackStateRef.current.dislikedSongIds];
-        const strict = await searchMusicBatch(relatedQueries(radioSeed), controller.signal);
-        if (cancelled) return;
-        const options = { strictGroups: strict.groups, moodSongs: context.moodSongs, moodLabel: context.moodLabel, excludeIds };
-        let songs = buildRadioQueue(radioSeed, options);
-        let warning = strict.error;
-        if (songs.length < RADIO_MIN_SONGS) {
-          const fillQueries = radioFillQueries(radioSeed);
-          const searchTerms = context.searchTerms.slice(0, 3);
-          const fill = await searchMusicBatch([...fillQueries, ...searchTerms], controller.signal).catch((error) => ({ groups: [], error: error.message }));
+        let songs;
+        let warning;
+        if (radioSeed.source === 'saavn') {
+          ({ songs, error: warning } = await fetchSaavnRadio(radioSeed, { excludeIds, mood: context.moodLabel, intent: context.intent, language: context.language, minimum: RADIO_MIN_SONGS }, controller.signal));
           if (cancelled) return;
-          songs = buildRadioQueue(radioSeed, {
-            ...options,
-            fillGroups: fill.groups.slice(0, fillQueries.length),
-            searchGroups: fill.groups.slice(fillQueries.length),
-            searchTerms,
-          });
-          warning = warning || fill.error;
+          if (songs.length < RADIO_MIN_SONGS) {
+            const fill = await fetchOpenRadio({ ...radioSeed, audiusUserId: null, genre: null }, { excludeIds, mood: context.moodLabel }, controller.signal).catch(() => ({ songs: [] }));
+            if (cancelled) return;
+            songs = [...songs, ...fill.songs.map((song) => ({ ...song, matchWhy: `Full track in a ${context.moodLabel} mood from open music.` }))].slice(0, 20);
+          }
+        } else {
+          ({ songs, error: warning } = await fetchOpenRadio(radioSeed, { excludeIds, mood: context.moodLabel }, controller.signal));
+          if (cancelled) return;
         }
         setRadio({ key: radioKey, songs, status: 'ready', error: warning });
         if (waitingForRadioRef.current) {
@@ -750,15 +749,17 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(new Error('Music discovery timed out. Please retry.')), 15000);
     async function discover() {
       try {
-        const preferences = { mood: currentMood, intent: currentIntent, language: discoveryLanguage };
         const seenTitles = moodSeenRef.current.get(preferenceKey) || [];
-        const seeds = moodDiscoverySeeds([...MOOD_CATALOG, ...MASTER_SONGS], preferences, discoveryRevision, seenTitles);
-        const { groups, error } = await searchMusicBatch(seeds.map((seed) => `${seed.title} ${seed.artist.split(',')[0]}`), controller.signal);
+        let songs;
+        try {
+          songs = await fetchSaavnMoodMix({ mood: currentMood, intent: currentIntent, language: discoveryLanguage }, discoveryRevision, controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          console.error('JioSaavn mood mix failed; using open music.', error);
+          songs = await fetchOpenMoodMix({ mood: currentMood, intent: currentIntent }, discoveryRevision, controller.signal);
+        }
         if (cancelled) return;
-        const songs = resolveMoodMix(groups, seeds, preferences);
-        if (error) console.error('Some mood searches failed.', error);
-        if (error && !songs.length) throw new Error(error);
-        setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error });
+        setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error: '' });
       } catch (error) {
         if (cancelled) return;
         console.error('Live discovery failed.', error);
@@ -782,20 +783,18 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(new Error('Related suggestions timed out. Please retry.')), 15000);
     async function suggest() {
       try {
-        const artists = new Set();
-        const seeds = discoveredSongs.filter((song) => {
-          const artist = moodSuggestionQuery(song);
-          if (artists.has(artist)) return false;
-          artists.add(artist);
-          return true;
-        }).slice(0, 3);
-        const { groups, error } = await searchMusicBatch(seeds.map(moodSuggestionQuery), controller.signal);
+        const options = {
+          excludeIds: discoveredSongs.map((song) => song.id),
+          mood: currentMood,
+          intent: currentIntent,
+          revision: discoveryRevision + suggestionRevision,
+        };
+        const fromSaavn = discoveredSongs.some((song) => song.source === 'saavn');
+        const songs = fromSaavn
+          ? await fetchSaavnSuggestions(discoveredSongs, options, controller.signal)
+          : await fetchOpenSuggestions(discoveredSongs, options, controller.signal);
         if (cancelled) return;
-        const seenTitles = suggestionsSeenRef.current.get(preferenceKey) || [];
-        const songs = buildMoodSuggestions(groups, seeds, discoveredSongs, discoveryRevision + suggestionRevision, seenTitles);
-        if (error) console.error('Some artist suggestions failed.', error);
-        if (error && !songs.length) throw new Error(error);
-        setMoodSuggestions({ key: suggestionKey, songs, status: 'ready', error });
+        setMoodSuggestions({ key: suggestionKey, songs, status: 'ready', error: '' });
       } catch (error) {
         if (cancelled) return;
         console.error('Related mood suggestions failed.', error);
@@ -806,7 +805,7 @@ export default function App() {
     }
     suggest();
     return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
-  }, [discoveryEnabled, discoveryStatus, discoveredSongs, discoveryRevision, suggestionRevision, suggestionKey, preferenceKey]);
+  }, [discoveryEnabled, discoveryStatus, discoveredSongs, discoveryRevision, suggestionRevision, suggestionKey, currentMood, currentIntent]);
 
   useEffect(() => {
     if (!isSearchOpen) return;
@@ -815,6 +814,7 @@ export default function App() {
     const timer = setTimeout(async () => {
       if (!searchQuery.trim()) {
         setLiveSearchResults([]);
+        setOpenSearchResults([]);
         setIsSearching(false);
         return;
       }
@@ -822,19 +822,30 @@ export default function App() {
       setSearchError('');
       const timeout = setTimeout(() => controller.abort(new Error('Search timed out. Please retry.')), 15000);
       try {
-        const items = await searchMusic(searchQuery.trim(), controller.signal);
+        const preferences = { mood: currentMood, intent: currentIntent };
+        const [primary, open] = await Promise.allSettled([
+          searchSaavn(searchQuery.trim(), controller.signal, preferences, { limit: 20 }),
+          searchOpenMusic(searchQuery.trim(), controller.signal, preferences),
+        ]);
         if (isCancelled) return;
-        setLiveSearchResults(normalizeTracks(items, { mood: currentMood, intent: currentIntent }).slice(0, 18));
+        const fullSongs = primary.status === 'fulfilled' ? primary.value : [];
+        const openSongsFound = open.status === 'fulfilled' ? open.value.slice(0, fullSongs.length ? 6 : 12) : [];
+        if (primary.status === 'rejected') console.error('JioSaavn search failed.', primary.reason);
+        if (open.status === 'rejected') console.error('Open music search failed.', open.reason);
+        if (primary.status === 'rejected' && open.status === 'rejected') throw primary.reason;
+        setLiveSearchResults(fullSongs);
+        setOpenSearchResults(openSongsFound);
+        if (primary.status === 'rejected') setSearchError(primary.reason.message);
       } catch (e) {
         if (isCancelled) return;
-        console.error('Online search failed.', e);
         setSearchError(e.message);
         setLiveSearchResults([]);
+        setOpenSearchResults([]);
       } finally {
         clearTimeout(timeout);
         if (!isCancelled) setIsSearching(false);
       }
-    }, 250);
+    }, 600);
 
     return () => {
       isCancelled = true;
@@ -1026,6 +1037,10 @@ export default function App() {
     }
   }, [songUrl, currentSongId, activeSong, isPlaying, handlePlaybackError]);
 
+  const seekMedia = useCallback((seconds) => {
+    if (audioRef.current) audioRef.current.currentTime = seconds;
+  }, []);
+
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -1145,7 +1160,7 @@ export default function App() {
         waitingForRadioRef.current = true;
         triggerToast('Finding similar songs. Autoplay will continue when ready.');
       } else {
-        triggerToast('No next preview available. Open the player to retry song radio or choose another song.');
+        triggerToast('No next song available. Open the player to retry song radio or choose another song.');
       }
       return;
     }
@@ -1162,12 +1177,12 @@ export default function App() {
   const handlePrevSong = () => {
     if (progressSec > 4) {
       setProgressSec(0);
-      if (audioRef.current) audioRef.current.currentTime = 0;
+      seekMedia(0);
       return;
     }
     const previous = playbackHistoryRef.current.pop();
     if (!previous) {
-      if (audioRef.current) audioRef.current.currentTime = 0;
+      seekMedia(0);
       setProgressSec(0);
       return;
     }
@@ -1209,7 +1224,7 @@ export default function App() {
     const newSeconds = Math.floor(clickRatio * trackDuration);
     setProgressSec(newSeconds);
     if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
-      audioRef.current.currentTime = newSeconds;
+      seekMedia(newSeconds);
     }
   };
 
@@ -1496,7 +1511,7 @@ export default function App() {
               <div>
                 <p className="text-[10px] tracking-[0.25em] uppercase text-violet-300 font-bold mb-2">The discovery studio</p>
                 <h2 id="search-title" className="text-xl sm:text-3xl font-black tracking-tight">Find your next song.</h2>
-                <p className="text-xs text-slate-400 mt-2">Left button to preview. Tap a song to open its player and song radio.</p>
+                <p className="text-xs text-slate-400 mt-2">Every result is a full song. Left button plays it here; tap a song to open its player and song radio.</p>
               </div>
               <button aria-label="Close search" onClick={closeSearch} className="search-touch-button rounded-full bg-white/5 hover:bg-white/15"><X className="w-5 h-5" /></button>
             </div>
@@ -1565,24 +1580,28 @@ export default function App() {
             )}
 
             <div aria-live="polite" role="status" className="text-xs text-slate-400">
-              {searchQuery.trim() && (isSearching ? 'Finding your sound...' : searchError ? 'Online search is unavailable.' : `${liveSearchResults.length} preview-ready tracks`)}
+              {searchQuery.trim() && (isSearching ? 'Finding your sound...' : searchError && !liveSearchResults.length && !openSearchResults.length ? 'Online search is unavailable.' : `${liveSearchResults.length + openSearchResults.length} full songs`)}
             </div>
             {searchQuery.trim() && isSearching ? (
               <div className="space-y-3" aria-label="Loading search results">{[0, 1, 2].map((i) => <div key={i} className="h-16 rounded-2xl bg-white/5 motion-safe:animate-pulse" />)}</div>
-            ) : searchQuery.trim() && searchError ? (
+            ) : searchQuery.trim() && searchError && !liveSearchResults.length && !openSearchResults.length ? (
               <div role="alert" className="rounded-2xl p-5 bg-rose-500/10 border border-rose-400/20 text-sm">
                 <p>{searchError}</p><button className="search-chip mt-3" onClick={() => { setIsSearching(true); setSearchRevision((value) => value + 1); }}>Try again</button>
               </div>
-            ) : searchQuery.trim() && liveSearchResults.length > 0 ? (
+            ) : searchQuery.trim() && (liveSearchResults.length > 0 || openSearchResults.length > 0) ? (
               <div className="space-y-2">
-                {liveSearchResults.map((song) => (
+                {searchError && <p role="status" className="text-xs text-amber-200 px-1">{searchError}</p>}
+                {[{ key: 'saavn', songs: liveSearchResults, title: 'Full songs · JioSaavn' }, { key: 'open', songs: openSearchResults, title: 'Open music · independent artists on Audius' }].filter((group) => group.songs.length).map((group) => (
+                  <div key={group.key} className="space-y-2">
+                    {group.title && <p className={`pt-3 px-1 text-[11px] font-bold uppercase tracking-wider ${group.key === 'saavn' ? 'text-teal-300' : 'text-fuchsia-300'}`}>{group.title}</p>}
+                    {group.songs.map((song) => (
                   <div
                     key={song.id}
                     onClick={() => handleSelectSong(song, true, { openPlayer: true, toggle: false })}
                     className={`search-result flex items-center rounded-2xl border transition ${currentSong?.id === song.id ? 'bg-violet-500/20 border-violet-400/40' : 'bg-white/[0.03] border-white/5 hover:border-violet-400/30'}`}
                   >
                     <button
-                      aria-label={`${currentSong?.id === song.id && isPlaying ? 'Pause' : 'Play'} preview of ${song.title} by ${song.artist}`}
+                      aria-label={`${currentSong?.id === song.id && isPlaying ? 'Pause' : 'Play'} ${song.title} by ${song.artist}`}
                       onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true, { keepSearchOpen: true }); }}
                       className="search-preview-button"
                     >
@@ -1604,15 +1623,17 @@ export default function App() {
                           {song.title}
                         </h4>
                         <p className="text-xs text-slate-400 truncate">{song.artist}</p>
-                        <span className="text-[10px] text-violet-300">{currentSong?.id === song.id && isPlaying ? 'Preview playing' : 'Open player & similar songs'}</span>
+                        <span className="text-[10px] text-violet-300">{currentSong?.id === song.id && isPlaying ? 'Now playing · full song' : `Full song${song.duration ? ` · ${formatDuration(song.duration)}` : ''}`}</span>
                       </div>
                       <ChevronRight className="w-4 h-4 shrink-0 text-slate-400 ml-auto" />
                     </button>
                   </div>
                 ))}
+                  </div>
+                ))}
               </div>
             ) : searchQuery.trim() ? (
-              <div className="py-8 text-center"><Music className="w-8 h-8 text-violet-300 mx-auto mb-3" /><p className="font-semibold">A different sound is out there.</p><p className="text-xs text-slate-400 mt-2">No previews found. Try an artist name or a shorter search.</p></div>
+              <div className="py-8 text-center"><Music className="w-8 h-8 text-violet-300 mx-auto mb-3" /><p className="font-semibold">A different sound is out there.</p><p className="text-xs text-slate-400 mt-2">No songs found. Try an artist name or a shorter search.</p></div>
             ) : null}
             </div>
           </div>
@@ -1682,7 +1703,7 @@ export default function App() {
 
               <div className="flex flex-wrap gap-5 text-[11px] text-slate-400">
                 <span className="flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-violet-300" /> Live music discovery</span>
-                <span className="flex items-center gap-1.5"><Volume2 className="w-3.5 h-3.5 text-rose-300" /> Short song previews</span>
+                <span className="flex items-center gap-1.5"><Volume2 className="w-3.5 h-3.5 text-rose-300" /> Full songs, no previews</span>
                 <span>3 questions. Your kind of music.</span>
               </div>
             </div>
@@ -1932,7 +1953,7 @@ export default function App() {
                     <p className="hidden sm:block text-sm text-slate-200/90 leading-relaxed mt-1.5 max-w-xl">
                       &ldquo;{String(friendlyExplanation)}&rdquo;
                     </p>
-                    <p className="sm:hidden text-xs text-slate-200/90 mt-2 leading-relaxed">Fresh previews for your mood. Press play and explore.</p>
+                    <p className="sm:hidden text-xs text-slate-200/90 mt-2 leading-relaxed">Full songs for your mood. Press play and explore.</p>
                   </div>
 
                   <div className="mood-summary-actions flex items-center gap-2 sm:gap-3 pt-1">
@@ -1973,7 +1994,7 @@ export default function App() {
                 {recommendations.spotlight && (
                   <button
                     type="button"
-                    aria-label={`Play spotlight preview of ${recommendations.spotlight.title}`}
+                    aria-label={`Play spotlight song ${recommendations.spotlight.title}`}
                     onClick={() => handleSelectSong(recommendations.spotlight, true)}
                     className="mood-spotlight flex-shrink-0 group relative cursor-pointer self-center lg:self-auto"
                   >
@@ -2011,25 +2032,10 @@ export default function App() {
                     <span>Made for Your Mood</span>
                   </h2>
                   <p className="hidden sm:block text-xs text-slate-400">
-                    Curated for {intentProfile.shortLabel} in {langProfile.badge}, with live iTunes previews. Your listening goal takes priority.
+                    Full songs for {intentProfile.shortLabel.toLowerCase()} from mood playlists in your language. Streams from <a href="https://www.jiosaavn.com" target="_blank" rel="noreferrer" className="underline hover:text-slate-200">JioSaavn</a>.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                  {['All', 'Hindi', 'English', 'Gujarati', 'Punjabi', 'Instrumental'].map((lang) => (
-                    <button
-                      key={lang}
-                      onClick={() => setActiveLangFilter(lang)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition flex-shrink-0 ${
-                        activeLangFilter === lang
-                          ? 'bg-white text-slate-950 shadow-md'
-                          : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10'
-                      }`}
-                    >
-                      {lang}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div className="m-rail flex flex-wrap gap-2 items-center">
@@ -2043,7 +2049,7 @@ export default function App() {
                   <h3 className="font-bold">The music service is taking a break.</h3><p className="text-sm text-slate-300 mt-2">{discovery.error}</p><button onClick={() => setDiscoveryRevision((value) => value + 1)} className="search-chip mt-4">Retry live discovery</button>
                 </div>
               ) : recommendations.allScored.length === 0 ? (
-                <div role="status" className="p-8 rounded-2xl border border-white/10 text-center"><Music className="w-8 h-8 mx-auto text-violet-300 mb-3" /><h3 className="font-bold">Let&apos;s try a different direction.</h3><p className="text-sm text-slate-400 mt-2">No matching curated previews for this mix. Change your language or intent, or find a fresh mix.</p></div>
+                <div role="status" className="p-8 rounded-2xl border border-white/10 text-center"><Music className="w-8 h-8 mx-auto text-violet-300 mb-3" /><h3 className="font-bold">Let&apos;s try a different direction.</h3><p className="text-sm text-slate-400 mt-2">No full songs matched this mix. Change your intent or find a fresh mix.</p></div>
               ) : <p role="status" className="text-[11px] text-slate-500">Showing {filteredMadeForMood.length} of {recommendations.allScored.length} available mood picks. {recommendations.allScored.length > 6 ? 'Find a fresh mix to explore more.' : 'Try another mood or language for more variety.'}</p>}
               {discoveryStatus === 'ready' && discovery.error && (
                 <div role="alert" className="text-xs text-amber-200">
@@ -2075,7 +2081,7 @@ export default function App() {
                         />
                         <button
                           type="button"
-                          aria-label={`${isCurrent && isPlaying ? 'Pause' : 'Play'} preview of ${song.title}`}
+                          aria-label={`${isCurrent && isPlaying ? 'Pause' : 'Play'} ${song.title}`}
                           onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true); }}
                           className={`absolute inset-0 rounded-xl bg-black/45 flex items-center justify-center transition focus:opacity-100 ${
                             isCurrent ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
@@ -2182,9 +2188,9 @@ export default function App() {
                 <div>
                   <h2 className="text-lg sm:text-xl font-extrabold text-white">You Might Also Like</h2>
                   <p className="hidden sm:block text-xs text-slate-400">
-                    More from artists in your mood mix. These are artist-related discoveries, not verified mood or language matches.
+                    Popular full songs from the artists in your mix.
                   </p>
-                  <p className="sm:hidden text-[11px] text-slate-400">More from artists in your mix · artist-related, not verified mood matches</p>
+                  <p className="sm:hidden text-[11px] text-slate-400">Popular songs from artists in your mix</p>
                 </div>
                 <button type="button" aria-label="Refresh suggestions" onClick={() => setSuggestionRevision((value) => value + 1)} disabled={discoveryStatus !== 'ready' || !discoveredSongs.length || suggestionStatus === 'loading'} className="search-chip shrink-0 disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /><span className="hidden sm:inline">Refresh suggestions</span></button>
               </div>
@@ -2192,14 +2198,14 @@ export default function App() {
               {discoveryStatus === 'loading' || (discoveredSongs.length > 0 && suggestionStatus === 'loading') ? (
                 <p role="status" className="text-sm text-slate-400">Finding more from these artists...</p>
               ) : discoveryStatus === 'error' || !discoveredSongs.length ? (
-                <p role="status" className="text-sm text-slate-400">Choose a mood mix with available previews to discover related artists.</p>
+                <p role="status" className="text-sm text-slate-400">Choose a mood mix to discover related artists.</p>
               ) : suggestionStatus === 'error' ? (
                 <div role="alert" className="text-sm text-rose-200">
                   <p>{moodSuggestions.error}</p>
                   <button type="button" onClick={() => setSuggestionRevision((value) => value + 1)} className="search-chip mt-2">Retry suggestions</button>
                 </div>
               ) : recommendations.youMightLike.length === 0 ? (
-                <p role="status" className="text-sm text-slate-400">No additional related previews for these artists. Try a fresh mood mix.</p>
+                <p role="status" className="text-sm text-slate-400">No more songs from these artists yet. Try a fresh mood mix.</p>
               ) : null}
               {suggestionStatus === 'ready' && moodSuggestions.error && <p role="alert" className="text-xs text-amber-200">{moodSuggestions.error}</p>}
               <div className="m-rail m-rail-cards grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 sm:gap-4">
@@ -2428,7 +2434,7 @@ export default function App() {
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 py-6 items-center">
               <div className="lg:col-span-6 flex flex-col items-center text-center">
-                <div className="mb-6">
+                <div className="mb-6 w-full flex justify-center">
                   <SongCoverArt
                     song={currentSong}
                     realCoverUrl={currentSong.realCoverUrl}
@@ -2557,8 +2563,8 @@ export default function App() {
                     {radioStatus === 'loading' && <p role="status" className="text-xs text-violet-200">Finding similar songs for autoplay...</p>}
                     {radioStatus === 'error' && <div role="alert" className="text-sm text-rose-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry song radio</button></div>}
                     {radioStatus === 'ready' && radio.error && <div role="alert" className="text-xs text-amber-200"><p>{radio.error}</p><button className="search-chip mt-2" onClick={() => setRadioRevision((value) => value + 1)}>Retry for more songs</button></div>}
-                    {radioStatus === 'ready' && radioSongs.length > 0 && <p role="status" className="text-xs text-emerald-200">{radioSongs.length} songs lined up for autoplay{radioSongs.length < RADIO_MIN_SONGS ? ' — only these related previews were found' : ''}.</p>}
-                    {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No more related previews found. Autoplay won&apos;t switch to unrelated songs. Choose another song to continue.</p>}
+                    {radioStatus === 'ready' && radioSongs.length > 0 && <p role="status" className="text-xs text-emerald-200">{radioSongs.length} songs lined up for autoplay{radioSongs.length < RADIO_MIN_SONGS ? ' — only these related songs were found' : ''}.</p>}
+                    {radioStatus === 'ready' && radioSongs.length === 0 && <p role="status" className="text-xs text-slate-300">No more related songs found. Autoplay won&apos;t switch to unrelated songs. Choose another song to continue.</p>}
                   </>}
 
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
