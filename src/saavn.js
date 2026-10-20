@@ -241,9 +241,11 @@ export async function fetchSaavnSuggestions(seedSongs, { excludeIds = [], mood, 
   const results = await Promise.allSettled(picked.map((artist) => artistSongs(artist.id, page, signal, { mood, intent }, `More from ${artist.name}, an artist in your mood mix.`, fetcher)));
   const excluded = new Set(excludeIds);
   const excludedTitles = new Set(seedSongs.map((song) => titleKey(song.title)));
-  const songs = dedupe(interleave(results.map((result) => (result.status === 'fulfilled' ? result.value : []))))
-    .filter((song) => !excluded.has(song.id) && !excludedTitles.has(titleKey(song.title)))
-    .slice(0, SAAVN_MIX_SIZE);
+  const candidates = dedupe(interleave(results.map((result) => (result.status === 'fulfilled' ? result.value : []))))
+    .filter((song) => !excluded.has(song.id) && !excludedTitles.has(titleKey(song.title)));
+  const languages = new Set(seedSongs.map((song) => song.language));
+  const sameLanguage = candidates.filter((song) => languages.has(song.language));
+  const songs = (sameLanguage.length >= 6 ? sameLanguage : candidates).slice(0, SAAVN_MIX_SIZE);
   if (!songs.length) {
     const failure = results.find((result) => result.status === 'rejected');
     if (failure) throw failure.reason;
