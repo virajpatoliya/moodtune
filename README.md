@@ -110,10 +110,19 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   new radio session. Loading, partial-failure, timeout, and failure states are
   explicit; if fewer than 15 related previews exist, the queue says so.
   Mood changes still update the separate mood-discovery section.
+- Volume: a simple Volume card sits at the end of the full player, after Why
+  This Song and the autoplay queue, with a mute button, a slim mood-coloured
+  slider, a full-volume button and the percentage; the desktop mini player shows a speaker icon that expands into a
+  slider on hover/focus. The level and mute state are saved in localStorage, and the
+  slider uses a perceptual (squared) curve. Dragging to 0 mutes; unmuting restores
+  the last audible level. Keyboard shortcuts (outside text fields): `M` toggles mute,
+  `[` / `]` change volume by 5%. iOS Safari ignores in-page volume, so there the
+  slider is hidden and you use the device buttons; mute still works.
 
 Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
 (or prefix with `npm exec --yes --package=node@22 --` on older Node).
-Run history tests with `node --test src/searchHistory.test.js`.
+Run history tests with `node --test src/searchHistory.test.js` and volume tests
+with `node --test src/volume.test.js`.
 
 ## Run locally
 
