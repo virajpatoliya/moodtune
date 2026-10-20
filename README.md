@@ -15,29 +15,27 @@ The project folder is `moodtune`.
 
 MoodTune plays **full songs only — no 30-second previews**, and needs no API keys.
 
-- **Search (songs or artists)** finds full songs on YouTube Music through public
-  instances of the open-source [Piped](https://github.com/TeamPiped/Piped) and
-  [Invidious](https://github.com/iv-org/invidious) front-ends (`src/youtube.js`).
-  Instances are tried in turn, the last working one is remembered, and results are
-  cached for six hours. Live streams, shorts and videos over 15 minutes are skipped.
-- **Playback** uses YouTube's official embedded IFrame player. YouTube requires the
-  player to stay visible, so a small video tile sits above the mini-player and the
-  video replaces the cover art in the full player. If an upload blocks embedding,
-  MoodTune looks for another upload of the same song, otherwise it skips ahead.
-- **Mood rows, You Might Also Like and autoplay fill** use full tracks from
-  [Audius](https://audius.co), an open, artist-owned platform with a keyless public
-  API (`src/openMusic.js`). Mood rows use the mood tag the artist chose (e.g. Calm →
-  Peaceful, Easygoing). Gated or unstreamable tracks, re-uploads and mixes over
-  15 minutes are skipped. The Audius catalog is mostly independent artists.
-- Search shows "Full songs · YouTube" and "Open music · Audius" groups together; if
-  the public YouTube instances are busy, the Audius results still show.
-- Playing a YouTube song starts a radio of 15+ songs from the same artist and similar
-  songs, topped up from Audius. Playing an Audius song starts an Audius radio: more
-  from that artist, then the same genre and mood, then the same mood tag.
+- **Search, Made for Your Mood, You Might Also Like and song radio** use full songs
+  from JioSaavn through the open-source
+  [jiosaavn-api](https://github.com/sumitkolhe/jiosaavn-api) project's public
+  instance (`src/saavn.js`). It returns direct AAC streams that play in MoodTune's
+  own audio player, so every result can be played in full: no embeds, no ads.
+  - Search ranks how much of your query matches the title/artist, then popularity;
+    karaoke, covers and remixes sink unless you ask for them. Artist searches lead
+    with that artist's most popular songs.
+  - Made for Your Mood picks JioSaavn mood playlists for your mood, goal and
+    language (e.g. "romantic hindi", "chill instrumental"); "Find a fresh mix"
+    rotates playlists. You Might Also Like shows popular songs by the mix's artists.
+  - Song radio mixes the artist's popular songs, the song's album and mood
+    playlists for 15–20 full songs.
+- **[Audius](https://audius.co)** (open, artist-owned, keyless API, `src/openMusic.js`)
+  is the fallback: its independent-artist results appear under "Open music" in search,
+  fill radio queues that are short, and power the mood row if JioSaavn is unavailable.
 
-Caveats: public Piped/Invidious instances are community-run and can be down at times;
-YouTube may show ads; YouTube embeds do not play from `127.0.0.1` (use `localhost`);
-on phones playback pauses when the browser is backgrounded and iOS ignores in-app volume.
+Caveats: the JioSaavn catalog is strongest for Indian music; some international label
+catalogs (e.g. Ed Sheeran) are missing, so only covers show for those. The public
+jiosaavn-api instance is community-run and can be down; Audius results still show.
+The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Firefox.
 
 ## Live discovery
 
