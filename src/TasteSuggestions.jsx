@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, Music, Pause, Play, RefreshCw } from 'lucide-react';
-import { buildTasteMix, searchMusic } from './musicDiscovery.js';
+import { buildTasteMix, searchMusicBatch, SEARCH_PRIORITY } from './musicDiscovery.js';
+import { useSearchRecovery } from './useSearchRecovery.js';
 
 export default function TasteSuggestions({ history, currentSongId, isPlaying, onPreview, onOpen, onClear }) {
   const [revision, setRevision] = useState(0);
@@ -8,17 +9,18 @@ export default function TasteSuggestions({ history, currentSongId, isPlaying, on
   const termsKey = JSON.stringify(history.slice(0, 3));
   const key = `${termsKey}:${revision}`;
   const loading = result.key !== key;
+  useSearchRecovery(!loading && Boolean(result.error) && !result.songs.length, () => setRevision((value) => value + 1));
 
   useEffect(() => {
     const terms = JSON.parse(termsKey);
     if (!terms.length) return;
     const controller = new AbortController();
     let cancelled = false;
-    const timeout = setTimeout(() => controller.abort(new Error('Personalized discovery timed out. Please retry.')), 15000);
+    const timeout = setTimeout(() => controller.abort(new Error('Personalized discovery timed out. Please retry.')), 150000);
     async function load() {
       try {
-        const groups = await Promise.all(terms.map((term) => searchMusic(term, controller.signal)));
-        if (!cancelled) setResult({ key, songs: buildTasteMix(groups, terms, revision), error: '' });
+        const { groups, error } = await searchMusicBatch(terms, controller.signal, SEARCH_PRIORITY.background);
+        if (!cancelled) setResult({ key, songs: buildTasteMix(groups, terms, revision), error });
       } catch (error) {
         if (cancelled) return;
         console.error('History-based discovery failed.', error);
@@ -46,7 +48,7 @@ export default function TasteSuggestions({ history, currentSongId, isPlaying, on
       </div>
       {loading ? <div role="status" aria-label="Loading taste suggestions" className="taste-shelf">
         {[0, 1, 2, 3].map((index) => <div key={index} className="taste-card h-32 rounded-2xl bg-white/5 motion-safe:animate-pulse" />)}
-      </div> : result.error ? <div role="alert" className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4 text-sm">
+      </div> : result.error && !result.songs.length ? <div role="alert" className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4 text-sm">
         <p>{result.error}</p><button className="search-chip mt-3" onClick={() => setRevision((value) => value + 1)}>Retry suggestions</button>
       </div> : !result.songs.length ? <p role="status" className="text-sm text-slate-300 py-4">No preview-ready songs found from these searches. Try searching for another song or artist.</p> : (
         <div className="taste-shelf" role="region" aria-label="Personalized song suggestions" tabIndex={0}>

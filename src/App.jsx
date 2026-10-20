@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, useSyncExternalStore } from 'react';
-import { buildMoodSuggestions, buildRadioQueue, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, upcomingTracks } from './musicDiscovery';
+import { buildMoodSuggestions, buildRadioQueue, discoveryQueries, moodDiscoverySeeds, moodSuggestionQuery, normalizeTracks, prioritizeFreshSongs, RADIO_MIN_SONGS, radioFillQueries, relatedQueries, resolveMoodMix, searchMusic, searchMusicBatch, SEARCH_PRIORITY, upcomingTracks } from './musicDiscovery';
 import { MOOD_CATALOG } from './moodCatalog.js';
 import './App.css';
 import TasteSuggestions from './TasteSuggestions.jsx';
 import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHistory.js';
+import { planHistoryUpdate } from './appHistory.js';
+import VibeScreen from './VibeScreen.jsx';
+import { useSearchRecovery } from './useSearchRecovery.js';
+import { VIBE_IDLE_MS, vibeTheme } from './vibeTheme.js';
 import {
   Play,
   Pause,
@@ -638,6 +642,7 @@ export default function App() {
   const [isRepeat, setIsRepeat] = useState(false);
   const [isFullPlayerOpen, setIsFullPlayerOpen] = useState(false);
   const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
+  const [isVibeOpen, setIsVibeOpen] = useState(false);
 
   const resolvedMedia = useMemo(() => ({}), []);
 
@@ -649,6 +654,9 @@ export default function App() {
   const moodSeenRef = useRef(new Map());
   const suggestionsSeenRef = useRef(new Map());
   const searchReturnFocusRef = useRef(null);
+  const analyzingTimeoutRef = useRef(null);
+  const applyLocationRef = useRef(null);
+  const historyRef = useRef({ stack: [], index: 0 });
   const waitingForRadioRef = useRef(false);
   const playbackHistoryRef = useRef([]);
   const radioPlayedRef = useRef(new Set());
@@ -673,6 +681,13 @@ export default function App() {
   }, [screen, quizStep]);
   const radioKey = `${radioSeed?.id}:${radioRevision}`;
   const radioStatus = radio.key === radioKey ? radio.status : 'loading';
+  useSearchRecovery(discoveryStatus === 'error', () => setDiscoveryRevision((value) => value + 1));
+  useSearchRecovery(suggestionStatus === 'error', () => setSuggestionRevision((value) => value + 1));
+  useSearchRecovery(radioStatus === 'error', () => setRadioRevision((value) => value + 1));
+  useSearchRecovery(Boolean(isSearchOpen && searchQuery.trim() && searchError), () => {
+    setIsSearching(true);
+    setSearchRevision((value) => value + 1);
+  });
   const radioSongs = useMemo(() => radio.key === radioKey ? radio.songs : [], [radio, radioKey]);
   const songCatalog = useMemo(() => {
     const songs = new Map([...MASTER_SONGS, ...savedSongs, ...discoveredSongs, ...suggestedSongs, ...radioSongs, ...liveSearchResults, ...(activeSong ? [activeSong] : [])].map((song) => [song.id, song]));
@@ -688,12 +703,12 @@ export default function App() {
     if (!radioSeed) return;
     const controller = new AbortController();
     let cancelled = false;
-    const timeout = setTimeout(() => controller.abort(new Error('Song radio timed out. Please retry.')), 15000);
+    const timeout = setTimeout(() => controller.abort(new Error('Song radio timed out. Please retry.')), 150000);
     async function loadRadio() {
       try {
         const context = radioContextRef.current;
         const excludeIds = [...radioPlayedRef.current, ...playbackStateRef.current.dislikedSongIds];
-        const strict = await searchMusicBatch(relatedQueries(radioSeed), controller.signal);
+        const strict = await searchMusicBatch(relatedQueries(radioSeed), controller.signal, SEARCH_PRIORITY.radio);
         if (cancelled) return;
         const options = { strictGroups: strict.groups, moodSongs: context.moodSongs, moodLabel: context.moodLabel, excludeIds };
         let songs = buildRadioQueue(radioSeed, options);
@@ -701,7 +716,7 @@ export default function App() {
         if (songs.length < RADIO_MIN_SONGS) {
           const fillQueries = radioFillQueries(radioSeed);
           const searchTerms = context.searchTerms.slice(0, 3);
-          const fill = await searchMusicBatch([...fillQueries, ...searchTerms], controller.signal).catch((error) => ({ groups: [], error: error.message }));
+          const fill = await searchMusicBatch([...fillQueries, ...searchTerms], controller.signal, SEARCH_PRIORITY.background).catch((error) => ({ groups: [], error: error.message }));
           if (cancelled) return;
           songs = buildRadioQueue(radioSeed, {
             ...options,
@@ -742,15 +757,22 @@ export default function App() {
     if (!discoveryEnabled) return;
     const controller = new AbortController();
     let cancelled = false;
-    const timeout = setTimeout(() => controller.abort(new Error('Music discovery timed out. Please retry.')), 15000);
+    const timeout = setTimeout(() => controller.abort(new Error('Music discovery timed out. Please retry.')), 150000);
     async function discover() {
       try {
         const preferences = { mood: currentMood, intent: currentIntent, language: discoveryLanguage };
         const seenTitles = moodSeenRef.current.get(preferenceKey) || [];
         const seeds = moodDiscoverySeeds([...MOOD_CATALOG, ...MASTER_SONGS], preferences, discoveryRevision, seenTitles);
-        const { groups, error } = await searchMusicBatch(seeds.map((seed) => `${seed.title} ${seed.artist.split(',')[0]}`), controller.signal);
+        const terms = seeds.map((seed) => `${seed.title} ${seed.artist.split(',')[0]}`);
+        // Show the first picks quickly, then fill the rest while staying under Apple's request limit.
+        const first = await searchMusicBatch(terms.slice(0, 8), controller.signal).catch((error) => ({ groups: terms.slice(0, 8).map(() => []), error: error.message }));
         if (cancelled) return;
-        const songs = resolveMoodMix(groups, seeds, preferences);
+        const firstSongs = resolveMoodMix(first.groups, seeds.slice(0, 8), preferences);
+        if (firstSongs.length) setDiscovery({ key: discoveryKey, songs: firstSongs, seenTitles, status: 'ready', error: '' });
+        const rest = await searchMusicBatch(terms.slice(8), controller.signal).catch((error) => ({ groups: [], error: error.message }));
+        if (cancelled) return;
+        const songs = resolveMoodMix([...first.groups, ...rest.groups], seeds, preferences);
+        const error = first.error || rest.error;
         if (error) console.error('Some mood searches failed.', error);
         if (error && !songs.length) throw new Error(error);
         setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error });
@@ -774,7 +796,7 @@ export default function App() {
     if (!discoveryEnabled || discoveryStatus !== 'ready' || !discoveredSongs.length) return;
     const controller = new AbortController();
     let cancelled = false;
-    const timeout = setTimeout(() => controller.abort(new Error('Related suggestions timed out. Please retry.')), 15000);
+    const timeout = setTimeout(() => controller.abort(new Error('Related suggestions timed out. Please retry.')), 150000);
     async function suggest() {
       try {
         const artists = new Set();
@@ -784,7 +806,7 @@ export default function App() {
           artists.add(artist);
           return true;
         }).slice(0, 3);
-        const { groups, error } = await searchMusicBatch(seeds.map(moodSuggestionQuery), controller.signal);
+        const { groups, error } = await searchMusicBatch(seeds.map(moodSuggestionQuery), controller.signal, SEARCH_PRIORITY.background);
         if (cancelled) return;
         const seenTitles = suggestionsSeenRef.current.get(preferenceKey) || [];
         const songs = buildMoodSuggestions(groups, seeds, discoveredSongs, discoveryRevision + suggestionRevision, seenTitles);
@@ -815,9 +837,9 @@ export default function App() {
       }
       setIsSearching(true);
       setSearchError('');
-      const timeout = setTimeout(() => controller.abort(new Error('Search timed out. Please retry.')), 15000);
+      const timeout = setTimeout(() => controller.abort(new Error('Search timed out. Please retry.')), 30000);
       try {
-        const items = await searchMusic(searchQuery.trim(), controller.signal);
+        const items = await searchMusic(searchQuery.trim(), controller.signal, SEARCH_PRIORITY.search);
         if (isCancelled) return;
         setLiveSearchResults(normalizeTracks(items, { mood: currentMood, intent: currentIntent }).slice(0, 18));
       } catch (e) {
@@ -1229,10 +1251,83 @@ export default function App() {
     setCurrentLanguage(langChoice);
     setActiveLangFilter('All');
     setScreen('analyzing');
-    setTimeout(() => {
+    clearTimeout(analyzingTimeoutRef.current);
+    analyzingTimeoutRef.current = setTimeout(() => {
       setScreen('home');
     }, 700);
   };
+
+  useEffect(() => {
+    applyLocationRef.current = (location) => {
+      clearTimeout(analyzingTimeoutRef.current);
+      if (isSearchOpen && !location.search) rememberSearch();
+      if (location.search && !isSearchOpen) {
+        searchReturnFocusRef.current = document.activeElement;
+        updateSearch('');
+      }
+      setScreen(location.screen);
+      if (location.screen === 'quiz') setQuizStep(location.step);
+      setIsSearchOpen(location.search);
+      setIsFullPlayerOpen(location.player);
+      setIsMoodModalOpen(location.mood);
+      setIsVibeOpen(Boolean(location.vibe));
+    };
+  });
+
+  useEffect(() => {
+    function onPopState(event) {
+      const entry = event.state?.moodtune;
+      if (!entry) return;
+      historyRef.current.index = entry.index;
+      historyRef.current.stack[entry.index] = entry.location;
+      applyLocationRef.current?.(entry.location);
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const location = { screen, step: quizStep, search: isSearchOpen, player: isFullPlayerOpen, mood: isMoodModalOpen, vibe: isVibeOpen };
+    const history = historyRef.current;
+    if (!history.stack.length) {
+      if (screen === 'analyzing') return;
+      history.stack = [location];
+      history.index = 0;
+      window.history.replaceState({ ...window.history.state, moodtune: { index: 0, location } }, '');
+      return;
+    }
+    const action = planHistoryUpdate(history.stack, history.index, location);
+    if (action === 'back') {
+      history.index -= 1;
+      window.history.back();
+    } else if (action === 'replace') {
+      history.stack[history.index] = location;
+      window.history.replaceState({ moodtune: { index: history.index, location } }, '');
+    } else if (action === 'push') {
+      history.index += 1;
+      history.stack = [...history.stack.slice(0, history.index), location];
+      window.history.pushState({ moodtune: { index: history.index, location } }, '');
+    }
+  }, [screen, quizStep, isSearchOpen, isFullPlayerOpen, isMoodModalOpen, isVibeOpen]);
+
+  const vibe = useMemo(() => vibeTheme(currentSong, currentMood), [currentSong, currentMood]);
+  const canAutoVibe = Boolean(isPlaying && currentSong && screen !== 'quiz' && screen !== 'analyzing' && !isSearchOpen && !isMoodModalOpen && !isVibeOpen);
+
+  useEffect(() => {
+    if (!canAutoVibe) return undefined;
+    let timer;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setIsVibeOpen(true), VIBE_IDLE_MS);
+    };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'scroll'];
+    events.forEach((name) => window.addEventListener(name, arm, { passive: true, capture: true }));
+    arm();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((name) => window.removeEventListener(name, arm, { capture: true }));
+    };
+  }, [canAutoVibe]);
 
   const formatDuration = (secs) => {
     if (isNaN(secs)) return '0:00';
@@ -1523,14 +1618,14 @@ export default function App() {
         </div>
       )}
 
-      {!isMoodModalOpen && !isSearchOpen && !isFullPlayerOpen && (
+      {!isMoodModalOpen && !isSearchOpen && !isFullPlayerOpen && !isVibeOpen && (
         <div
           aria-hidden="true"
           className={`bottom-dock-backdrop ${(screen === 'home' || activeSong) && currentSong && isPlayerVisible ? 'bottom-dock-backdrop-tall' : ''}`}
         />
       )}
 
-      {!isMoodModalOpen && <button
+      {!isMoodModalOpen && !isVibeOpen && <button
         hidden={isSearchOpen}
         className={`floating-search ${(screen === 'home' || activeSong) && currentSong && isPlayerVisible && !isFullPlayerOpen ? 'floating-search-with-player' : ''}`}
         onClick={openSearch} aria-label="Search songs or artists from anywhere">
@@ -2319,7 +2414,7 @@ export default function App() {
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 py-6 items-center">
               <div className="lg:col-span-6 flex flex-col items-center text-center">
-                <div className="mb-6">
+                <div className="mb-6 relative">
                   <SongCoverArt
                     song={currentSong}
                     realCoverUrl={currentSong.realCoverUrl}
@@ -2327,6 +2422,15 @@ export default function App() {
                     isPlaying={isPlaying}
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setIsVibeOpen(true)}
+                  className="vibe-launch mb-5"
+                  style={{ '--vibe-a': vibe.colors[0], '--vibe-b': vibe.colors[1] }}
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Vibe Screen · {vibe.label}</span>
+                </button>
 
                 <div className="w-full max-w-sm flex items-center justify-between gap-3 mb-4">
                   <div className="text-left min-w-0">
@@ -2645,6 +2749,20 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {isVibeOpen && currentSong && (
+        <VibeScreen
+          song={currentSong}
+          coverUrl={currentSong.realCoverUrl || resolvedMedia[currentSong.id]?.artworkUrl}
+          theme={vibe}
+          isPlaying={isPlaying}
+          progress={progressSec}
+          duration={trackDuration}
+          onTogglePlay={handleTogglePlay}
+          onNext={() => handleNextSong(true)}
+          onClose={() => setIsVibeOpen(false)}
+        />
       )}
     </div>
   );

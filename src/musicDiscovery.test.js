@@ -167,13 +167,12 @@ test('normalization deduplicates and includes only preview-ready tracks without 
 });
 
 test('search encodes input and forwards cancellation', async (t) => {
-  const signal = new AbortController().signal;
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(new URL(url).searchParams.get('term'), 'love & peace');
-    assert.equal(options.signal, signal);
+    assert.ok(options.signal instanceof AbortSignal);
     return { ok: true, json: async () => ({ results: [{ trackId: 1 }] }) };
   });
-  assert.deepEqual(await searchMusic('love & peace', signal), [{ trackId: 1 }]);
+  assert.deepEqual(await searchMusic('love & peace', new AbortController().signal), [{ trackId: 1 }]);
 });
 
 test('discovery balances query sources and prioritizes artist variety without dropping tracks', () => {
@@ -196,8 +195,8 @@ test('discovery balances query sources and prioritizes artist variety without dr
 });
 
 test('search surfaces HTTP and malformed-response errors', async (t) => {
-  const mock = t.mock.method(globalThis, 'fetch', async () => ({ ok: false, status: 429 }));
-  await assert.rejects(searchMusic('test'), /HTTP 429/);
+  const mock = t.mock.method(globalThis, 'fetch', async () => ({ ok: false, status: 500 }));
+  await assert.rejects(searchMusic('test'), /HTTP 500/);
   mock.mock.mockImplementation(async () => ({ ok: true, json: async () => ({}) }));
   await assert.rejects(searchMusic('test'), /invalid response/);
 });
@@ -218,12 +217,12 @@ test('successful searches are cached but cancelled requests and failures are not
 
 test('batch discovery retains successful searches with an explicit partial error and rejects total failure', async (t) => {
   t.mock.method(globalThis, 'fetch', async (url) => new URL(url).searchParams.get('term').includes('fail')
-    ? { ok: false, status: 429 }
+    ? { ok: false, status: 500 }
     : { ok: true, json: async () => ({ results: [{ trackId: 456 }] }) });
   const result = await searchMusicBatch(['batch good', 'batch fail']);
   assert.deepEqual(result.groups, [[{ trackId: 456 }], []]);
-  assert.match(result.error, /1 music searches.*HTTP 429/);
-  await assert.rejects(searchMusicBatch(['batch fail']), /HTTP 429/);
+  assert.match(result.error, /1 music searches.*HTTP 500/);
+  await assert.rejects(searchMusicBatch(['batch fail']), /HTTP 500/);
 });
 
 test('song radio follows current-song metadata instead of mood or search history', () => {

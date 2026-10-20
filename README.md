@@ -87,6 +87,30 @@ use the iTunes Search API (India storefront). Previews are short clips, not full
   scrollable rows; Made for Your Mood and "Because you liked" scroll sideways in
   columns of three songs; You Might Also Like is a row of cover cards. Long helper
   copy is hidden on mobile. Tablet and desktop layouts are unchanged.
+- The browser/phone Back button follows in-app navigation: it steps back through
+  quiz steps and screens, and closes the search sheet, full player, or Change Mood
+  panel before leaving the site. Closing an overlay with its X uses the same history
+  entry, and opening the player from search replaces the search entry so Back does
+  not reopen search. Navigation is kept in memory; the URL does not change.
+- All iTunes searches go through one scheduler ([src/searchClient.js](src/searchClient.js)).
+  Apple allows only about 20 searches per minute per IP, rejects bursts, and also
+  rejects some single requests at random with HTTP 403. The scheduler starts one
+  request about every second (2 at a time), keeps automatic sections to 15 per minute
+  so typed searches always have room, and retries a rejected search up to 3 times
+  with short growing waits. Only 8 rejections in a row pause automatic searches
+  (20 seconds, doubling up to 2 minutes); typed searches may still try. Identical
+  searches share one request, results are cached on the device for 6 hours (kept
+  up to 7 days as a fallback), and the request budget survives reloads. Made for
+  Your Mood shows its first 8 picks, then fills in the rest.
+- Vibe Screen: a full-screen live wallpaper with a clock, cover, progress bar,
+  and play/next controls. Open it from the full player, or it starts by itself
+  after 30 seconds without a touch while a song is playing (not during the quiz,
+  search, or Change Mood). Tap anywhere, press Escape, or use Back to close it.
+  The theme comes from the song's style words (Garba → festive swirl, Bhajan →
+  devotional glow, Qawwali/Ghazal → Sufi night, Lo-fi → haze), then the song's
+  mood tags, then its genre, then your selected mood. It is metadata-based, not
+  audio analysis. Animations pause with the song, respect reduced-motion
+  settings, and the screen is kept awake where the browser supports it.
 - Each result has a separate left Play/Pause button to preview without leaving
   search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.

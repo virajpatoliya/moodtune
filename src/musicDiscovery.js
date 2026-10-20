@@ -1,3 +1,6 @@
+import { createSearchClient, PRIORITY, RateLimitError } from './searchClient.js';
+
+export { PRIORITY as SEARCH_PRIORITY };
 const MOOD_TERMS = {
   happy: ['happy', 'dance', 'feel good'],
   calm: ['acoustic', 'chill', 'peaceful'],
@@ -282,32 +285,26 @@ export function buildTasteMix(groups, terms, revision = 0) {
     });
 }
 
-const searchCache = new Map();
+const searchClient = createSearchClient();
 
-export async function searchMusic(term, signal) {
-  signal?.throwIfAborted();
-  const key = term.trim().toLowerCase().replace(/\s+/g, ' ');
-  const cached = searchCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.results;
-  const params = new URLSearchParams({
-    term, media: 'music', entity: 'song', limit: '30', country: 'IN',
-  });
-  const response = await fetch(`https://itunes.apple.com/search?${params}`, { signal });
-  if (!response.ok) throw new Error(`Music search unavailable (HTTP ${response.status}).`);
-  const data = await response.json();
-  if (!Array.isArray(data.results)) throw new Error('Music service returned an invalid response.');
-  if (searchCache.size >= 150) searchCache.delete(searchCache.keys().next().value);
-  searchCache.set(key, { results: data.results, expires: Date.now() + 10 * 60 * 1000 });
-  return data.results;
+export function searchCooldownRemaining() {
+  return searchClient.cooldownRemaining();
 }
 
-export async function searchMusicBatch(terms, signal) {
-  const responses = await Promise.allSettled(terms.map((term) => searchMusic(term, signal)));
+export function searchMusic(term, signal, priority = PRIORITY.discovery) {
+  return searchClient.search(term, { signal, priority });
+}
+
+export async function searchMusicBatch(terms, signal, priority = PRIORITY.discovery) {
+  const responses = await Promise.allSettled(terms.map((term) => searchMusic(term, signal, priority)));
   const failures = responses.filter((response) => response.status === 'rejected');
   const groups = responses.map((response) => response.status === 'fulfilled' ? response.value : []);
   if (failures.length === responses.length && failures.length) throw failures[0].reason;
-  const error = failures.length
-    ? `${failures.length} music searches could not finish. ${failures[0].reason.message} Showing available previews; retry for more.`
-    : '';
+  const rateLimited = failures.find((failure) => failure.reason instanceof RateLimitError);
+  const error = rateLimited
+    ? `Some songs are waiting because Apple's music search is busy. Showing what loaded; retry in about ${Math.max(5, Math.ceil(rateLimited.reason.retryInMs / 1000))}s for more.`
+    : failures.length
+      ? `${failures.length} music searches could not finish. ${failures[0].reason.message} Showing available previews; retry for more.`
+      : '';
   return { groups, error };
 }
