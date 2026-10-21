@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, Music, Pause, Play, RefreshCw } from 'lucide-react';
 import { buildTasteMix, searchMusic } from './musicDiscovery.js';
+import TiltedCard from './components/reactbits/TiltedCard.jsx';
 
 export default function TasteSuggestions({ history, currentSongId, isPlaying, onPreview, onOpen, onClear }) {
   const [revision, setRevision] = useState(0);
@@ -51,8 +52,14 @@ export default function TasteSuggestions({ history, currentSongId, isPlaying, on
       </div> : !result.songs.length ? <p role="status" className="text-sm text-slate-300 py-4">No preview-ready songs found from these searches. Try searching for another song or artist.</p> : (
         <div className="taste-shelf" role="region" aria-label="Personalized song suggestions" tabIndex={0}>
           {result.songs.map((song) => (
-            <div key={song.id} className="taste-card rounded-2xl border border-white/10 bg-white/[0.03] p-3"
-              onClick={() => onOpen(song)}>
+            <TiltedCard
+              key={song.id}
+              rotateAmplitude={8}
+              scaleOnHover={1.03}
+              glare={0.25}
+              className="taste-card rounded-2xl border border-white/10 bg-white/[0.03] p-3 cursor-pointer"
+              onClick={() => onOpen(song)}
+            >
               <div className="flex items-center justify-between gap-3 mb-3">
                 <button className="taste-art" aria-label={`Open taste player for ${song.title} by ${song.artist}`}
                   onClick={(event) => { event.stopPropagation(); onOpen(song); }}>
@@ -70,7 +77,7 @@ export default function TasteSuggestions({ history, currentSongId, isPlaying, on
                 <span className="block text-xs text-slate-400 truncate mt-1">{song.artist}</span>
                 <span className="block text-[10px] text-violet-300 truncate mt-2">From &ldquo;{song.searchTerm}&rdquo; <ArrowRight className="inline w-3 h-3" /></span>
               </button>
-            </div>
+            </TiltedCard>
           ))}
         </div>
       )}
