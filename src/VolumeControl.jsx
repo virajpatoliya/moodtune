@@ -4,7 +4,7 @@ import { useReducedMotion } from './components/reactbits/motion.js';
 import { volumeLevel } from './volume.js';
 
 const ICONS = { muted: VolumeX, low: Volume, medium: Volume1, high: Volume2 };
-const MAX_STRETCH = 14;
+const MAX_STRETCH = 18;
 const OVERSHOOT_RANGE = 160;
 
 export function VolumeIcon({ level, muted, className }) {
@@ -13,10 +13,11 @@ export function VolumeIcon({ level, muted, className }) {
 }
 
 // React Bits ElasticSlider feel on top of the native range input (which keeps keyboard and
-// screen-reader support): dragging past either end stretches the wedge like rubber, the end
-// icon bumps, and it springs back on release.
+// screen-reader support): the pill thickens while held, dragging past either end stretches the
+// track like rubber, the end icon bumps, and it springs back on release.
 function useElasticDrag(reduced) {
-  const wedgeRef = useRef(null);
+  const pillRef = useRef(null);
+  const trackRef = useRef(null);
   const minRef = useRef(null);
   const maxRef = useRef(null);
   const cleanupRef = useRef(null);
@@ -24,18 +25,20 @@ function useElasticDrag(reduced) {
   useEffect(() => () => cleanupRef.current?.(), []);
 
   const onPointerDown = (event) => {
-    const wedge = wedgeRef.current;
-    if (!wedge || reduced) return;
-    wedge.classList.add('is-dragging');
+    const pill = pillRef.current;
+    const track = trackRef.current;
+    if (!pill || !track) return;
+    pill.classList.add('is-dragging');
 
     const onMove = (e) => {
-      const rect = wedge.getBoundingClientRect();
+      if (reduced) return;
+      const rect = pill.getBoundingClientRect();
       const over = e.clientX < rect.left ? e.clientX - rect.left : e.clientX > rect.right ? e.clientX - rect.right : 0;
       // Square-root falloff: easy to start stretching, harder the further you pull.
       const stretch = Math.sign(over) * Math.min(1, Math.sqrt(Math.abs(over) / OVERSHOOT_RANGE)) * MAX_STRETCH;
-      wedge.style.transition = 'none';
-      wedge.style.transformOrigin = over < 0 ? 'right center' : 'left center';
-      wedge.style.transform = stretch ? `scaleX(${1 + Math.abs(stretch) / rect.width}) scaleY(${1 - Math.abs(stretch) / 120})` : '';
+      track.style.transition = 'none';
+      track.style.transformOrigin = over < 0 ? 'right center' : 'left center';
+      track.style.transform = stretch ? `scaleX(${1 + Math.abs(stretch) / rect.width}) scaleY(${1 - Math.abs(stretch) / 60})` : '';
       const bump = (el, active) => {
         if (el) el.style.transform = active ? `scale(${1 + Math.abs(stretch) / 40}) translateX(${stretch / 2}px)` : '';
       };
@@ -44,9 +47,9 @@ function useElasticDrag(reduced) {
     };
 
     const release = () => {
-      wedge.classList.remove('is-dragging');
-      wedge.style.transition = '';
-      wedge.style.transform = '';
+      pill.classList.remove('is-dragging');
+      track.style.transition = '';
+      track.style.transform = '';
       if (minRef.current) minRef.current.style.transform = '';
       if (maxRef.current) maxRef.current.style.transform = '';
       cleanupRef.current?.();
@@ -65,7 +68,7 @@ function useElasticDrag(reduced) {
     onMove(event);
   };
 
-  return { wedgeRef, minRef, maxRef, onPointerDown };
+  return { pillRef, trackRef, minRef, maxRef, onPointerDown };
 }
 
 export default function VolumeControl({ level, muted, supported, accent, onChange, onToggleMute, variant = 'full' }) {
@@ -75,7 +78,7 @@ export default function VolumeControl({ level, muted, supported, accent, onChang
   const style = { '--vol-fill': `${percent}%`, '--vol-a': accent[0], '--vol-b': accent[1] };
   const muteLabel = state === 'muted' ? 'Unmute' : 'Mute';
   const reduced = useReducedMotion();
-  const { wedgeRef, minRef, maxRef, onPointerDown: onWedgePointerDown } = useElasticDrag(reduced);
+  const { pillRef, trackRef, minRef, maxRef, onPointerDown: onPillPointerDown } = useElasticDrag(reduced);
 
   const slider = supported && (
     <input
@@ -133,7 +136,11 @@ export default function VolumeControl({ level, muted, supported, accent, onChang
           {state === 'muted' ? <VolumeX className="w-4 h-4" /> : <Volume className="w-4 h-4" />}
         </button>
         {supported ? (
-          <div ref={wedgeRef} className="volume-wedge" onPointerDown={onWedgePointerDown}>
+          <div ref={pillRef} className={`volume-pill ${state === 'muted' ? 'is-muted' : ''}`} onPointerDown={onPillPointerDown}>
+            <div ref={trackRef} className="volume-pill-track" aria-hidden="true">
+              <div className="volume-pill-fill" />
+            </div>
+            <span className="volume-pill-bubble" aria-hidden="true">{percent}</span>
             {slider}
           </div>
         ) : (

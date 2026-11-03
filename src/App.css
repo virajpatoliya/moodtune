@@ -769,56 +769,6 @@ button:disabled {
 
 .volume-slider:focus-visible { box-shadow: 0 0 0 3px rgb(255 255 255 / 0.25); }
 
-/* A rising wedge reads as "volume" and looks nothing like the song progress bar. */
-.volume-wedge {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  height: 1.5rem;
-  display: flex;
-  align-items: center;
-}
-
-.volume-wedge::before {
-  content: '';
-  position: absolute;
-  inset: 0.15rem 0;
-  border-radius: 4px;
-  clip-path: polygon(0 80%, 100% 0, 100% 100%, 0 100%);
-  background: linear-gradient(90deg, var(--vol-a), var(--vol-b)) 0 / var(--vol-fill) 100% no-repeat,
-    rgb(255 255 255 / 0.1);
-  pointer-events: none;
-}
-
-.volume-wedge .volume-slider {
-  height: 100%;
-  background: transparent;
-  border-radius: 0;
-}
-
-.volume-wedge .volume-slider::-webkit-slider-thumb {
-  width: 6px;
-  height: 1.5rem;
-  border-radius: 999px;
-  box-shadow: 0 0 12px var(--vol-a);
-}
-
-.volume-wedge .volume-slider::-moz-range-thumb {
-  width: 6px;
-  height: 1.5rem;
-  border-radius: 999px;
-}
-
-.volume-wedge .volume-slider:hover::-webkit-slider-thumb,
-.volume-wedge .volume-slider:active::-webkit-slider-thumb { transform: scaleY(1.12); }
-
-.volume-wedge .volume-slider:focus-visible {
-  box-shadow: none;
-  outline: 2px solid rgb(255 255 255 / 0.3);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
 .volume-compact {
   display: flex;
   align-items: center;
@@ -1004,25 +954,96 @@ button:disabled {
   .rb-pills-indicator { transition: opacity 0.2s ease; }
 }
 
-/* Elastic volume wedge (React Bits ElasticSlider feel) */
-.volume-wedge {
-  transition: transform 0.55s cubic-bezier(0.34, 1.8, 0.5, 1);
+/* Volume pill (Apple Music / React Bits ElasticSlider style): a slim pill that thickens while
+   held, a mood-gradient fill with no knob, a value bubble while dragging, and rubber-band ends.
+   The native range input sits on top, invisible, for pointer, keyboard and screen readers. */
+.volume-pill {
+  --pill-h: 6px;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
   touch-action: pan-y;
 }
 
-.volume-wedge::before { transition: filter 0.2s ease; }
-.volume-wedge.is-dragging::before { filter: brightness(1.2) drop-shadow(0 0 8px var(--vol-a)); }
+.volume-pill-track {
+  position: relative;
+  width: 100%;
+  height: var(--pill-h);
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  transition: height 0.25s cubic-bezier(0.34, 1.4, 0.64, 1), transform 0.55s cubic-bezier(0.34, 1.8, 0.5, 1);
+  pointer-events: none;
+}
+
+.volume-pill-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--vol-fill);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--vol-a), var(--vol-b));
+  box-shadow: 0 0 14px -2px var(--vol-a);
+  transition: width 0.08s linear;
+}
+
+.volume-pill.is-muted .volume-pill-fill { opacity: 0.35; }
+
+.volume-pill-bubble {
+  position: absolute;
+  left: clamp(14px, var(--vol-fill), calc(100% - 14px));
+  bottom: calc(50% + 14px);
+  min-width: 2rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: #020617;
+  background: #fff;
+  box-shadow: 0 6px 16px -6px var(--vol-a);
+  opacity: 0;
+  transform: translate(-50%, 6px) scale(0.85);
+  transition: opacity 0.18s ease, transform 0.25s cubic-bezier(0.34, 1.6, 0.64, 1);
+  pointer-events: none;
+}
+
+.volume-pill .volume-slider {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  opacity: 0;
+  background: transparent;
+}
+
+.volume-pill:hover,
+.volume-pill:focus-within,
+.volume-pill.is-dragging { --pill-h: 14px; }
+
+.volume-pill.is-dragging .volume-pill-bubble,
+.volume-pill:has(.volume-slider:focus-visible) .volume-pill-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.volume-pill:has(.volume-slider:focus-visible) .volume-pill-track {
+  outline: 2px solid rgb(255 255 255 / 0.35);
+  outline-offset: 3px;
+}
 
 .volume-mute,
 .volume-max {
   transition: transform 0.55s cubic-bezier(0.34, 1.8, 0.5, 1), background 0.2s ease, color 0.2s ease;
 }
 
-.volume-wedge.is-dragging .volume-slider::-webkit-slider-thumb { transform: scaleY(1.18); }
-
 @media (pointer: coarse) {
-  .volume-wedge { height: 2.5rem; }
-  .volume-wedge .volume-slider::-webkit-slider-thumb { width: 10px; }
+  .volume-pill { height: 2.75rem; --pill-h: 10px; }
+  .volume-pill:focus-within,
+  .volume-pill.is-dragging { --pill-h: 18px; }
   .volume-mute,
   .volume-max { width: 2.75rem; height: 2.75rem; }
 }
@@ -1037,7 +1058,9 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .volume-wedge,
+  .volume-pill-track,
+  .volume-pill-fill,
+  .volume-pill-bubble,
   .volume-mute,
   .volume-max { transition: none; }
 }
