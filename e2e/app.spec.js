@@ -118,3 +118,49 @@ test('reduced motion turns the text animations off', async ({ page }) => {
   await expect(page.locator('.rb-gradient').first()).toHaveCSS('animation-name', 'none');
   await expect(page.locator('.rb-shiny').first()).toHaveCSS('animation-name', 'none');
 });
+
+// Records Element.animate() calls so we can check which open effect ran and from where.
+async function recordAnimations(page) {
+  await page.addInitScript(() => {
+    window.__animations = [];
+    const original = Element.prototype.animate;
+    Element.prototype.animate = function animate(keyframes, options) {
+      window.__animations.push({ className: String(this.className), first: keyframes?.[0] ?? null });
+      return original.call(this, keyframes, options);
+    };
+  });
+  await page.reload();
+}
+
+const grew = (page, classPart) => page.evaluate((part) => window.__animations.some(
+  (a) => a.className.includes(part) && String(a.first?.clipPath || '').startsWith('inset(')
+), classPart);
+
+test('search panel grows out of the search pill and the pill pops back on close', async ({ page }) => {
+  await recordAnimations(page);
+  const pill = page.getByRole('button', { name: 'Search songs or artists from anywhere' });
+  await pill.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => grew(page, 'search-studio')).toBe(true);
+
+  await page.getByRole('button', { name: 'Close search' }).click();
+  await expect(pill).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__animations.some((a) => a.className.includes('floating-search') && a.first?.scale))).toBe(true);
+});
+
+test('full player grows out of the mini player bar', async ({ page }) => {
+  await recordAnimations(page);
+  await openMood(page);
+  await page.getByRole('button', { name: 'Play Mood Radio' }).click();
+  await page.locator('.flex-1.min-w-0.cursor-pointer.group').click();
+  await expect(page.getByRole('button', { name: 'Minimize Player' })).toBeVisible();
+  await expect.poll(() => grew(page, 'backdrop-blur-2xl overflow-y-auto')).toBe(true);
+});
+
+test('open effects fall back to a plain fade for reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await recordAnimations(page);
+  await page.getByRole('button', { name: 'Search songs or artists from anywhere' }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  expect(await grew(page, 'search-studio')).toBe(false);
+});

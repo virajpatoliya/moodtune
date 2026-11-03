@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { discoveryQueries, prioritizeFreshSongs, RADIO_MIN_SONGS, upcomingTracks } from './musicDiscovery';
 import { fetchOpenMoodMix, fetchOpenRadio, fetchOpenSuggestions, searchOpenMusic } from './openMusic.js';
 import { fetchSaavnMoodMix, fetchSaavnRadio, fetchSaavnSuggestions, searchSaavn } from './saavn.js';
@@ -17,6 +17,7 @@ import GradientText from './components/reactbits/GradientText.jsx';
 import Aurora from './components/reactbits/Aurora.jsx';
 import SpotlightCard from './components/reactbits/SpotlightCard.jsx';
 import SlidingPills from './components/reactbits/SlidingPills.jsx';
+import { expandFrom, settleBack } from './components/reactbits/expandFrom.js';
 import {
   Play,
   Pause,
@@ -680,6 +681,10 @@ export default function App() {
   const mediaActionsRef = useRef(null);
   const searchInputRef = useRef(null);
   const searchDialogRef = useRef(null);
+  const searchOriginRef = useRef(null);
+  const floatingSearchRef = useRef(null);
+  const miniPlayerRef = useRef(null);
+  const fullPlayerRef = useRef(null);
   const quizPanelRef = useRef(null);
   const moodSeenRef = useRef(new Map());
   const suggestionsSeenRef = useRef(new Map());
@@ -1309,6 +1314,10 @@ export default function App() {
 
   const openSearch = () => {
     searchReturnFocusRef.current = document.activeElement;
+    // Grow the search panel out of whatever opened it (the floating pill by default).
+    const opener = document.activeElement?.closest?.('button');
+    const openerRect = opener?.getBoundingClientRect();
+    searchOriginRef.current = openerRect?.width ? openerRect : floatingSearchRef.current?.getBoundingClientRect() ?? null;
     updateSearch('');
     setIsSearchOpen(true);
   };
@@ -1350,6 +1359,22 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Open effects: search grows out of its pill, the full player out of the mini player bar.
+  // Layout effects run before paint, so the panels never flash at full size first.
+  const wasSearchOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (isSearchOpen) expandFrom(searchDialogRef.current, searchOriginRef.current, { radius: 999 });
+    else if (wasSearchOpenRef.current) settleBack(floatingSearchRef.current);
+    wasSearchOpenRef.current = isSearchOpen;
+  }, [isSearchOpen]);
+
+  const wasFullPlayerOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (isFullPlayerOpen) expandFrom(fullPlayerRef.current, miniPlayerRef.current?.getBoundingClientRect(), { duration: 560 });
+    else if (wasFullPlayerOpenRef.current) settleBack(miniPlayerRef.current);
+    wasFullPlayerOpenRef.current = isFullPlayerOpen;
+  }, [isFullPlayerOpen]);
 
   // Lock-screen, notification and headset controls (Android Chrome, iOS Safari, desktop media keys).
   useEffect(() => {
@@ -1603,8 +1628,8 @@ export default function App() {
       )}
 
       {isSearchOpen && (
-        <div className="search-overlay fixed inset-x-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
-          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl flex flex-col gap-4">
+        <div className="search-overlay rb-fade-in fixed inset-x-0 bg-slate-950/85 backdrop-blur-xl flex items-end sm:items-start justify-center sm:pt-12 sm:px-4" onClick={(e) => { if (e.target === e.currentTarget) closeSearch(); }}>
+          <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-labelledby="search-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} className="search-studio rb-stagger border border-white/15 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full p-4 sm:p-7 shadow-2xl flex flex-col gap-4">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] tracking-[0.25em] uppercase text-violet-300 font-bold mb-2">The discovery studio</p>
@@ -1746,6 +1771,7 @@ export default function App() {
       )}
 
       {!isMoodModalOpen && <button
+        ref={floatingSearchRef}
         hidden={isSearchOpen}
         className={`floating-search ${(screen === 'home' || activeSong) && currentSong && isPlayerVisible && !isFullPlayerOpen ? 'floating-search-with-player' : ''}`}
         onClick={openSearch} aria-label="Search songs or artists from anywhere">
@@ -2402,7 +2428,7 @@ export default function App() {
 
       {(screen === 'home' || activeSong) && currentSong && isPlayerVisible && (
         <div className="fixed bottom-0 inset-x-0 z-30 flex justify-center px-3 pb-3 pointer-events-none transition-all duration-300">
-          <div className="pointer-events-auto w-full max-w-5xl rounded-3xl bg-slate-900/80 border border-white/15 shadow-2xl backdrop-blur-2xl px-4 py-3">
+          <div ref={miniPlayerRef} className="pointer-events-auto w-full max-w-5xl rounded-3xl bg-slate-900/80 border border-white/15 shadow-2xl backdrop-blur-2xl px-4 py-3">
             <div className="flex items-center gap-2.5 mb-2.5">
               <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
                 {formatDuration(progressSec)}
@@ -2528,8 +2554,8 @@ export default function App() {
       )}
 
       {isFullPlayerOpen && currentSong && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl overflow-y-auto flex flex-col items-center p-4 sm:p-8 pb-28 sm:pb-28 animate-in fade-in">
-          <div className="w-full max-w-4xl my-auto">
+        <div ref={fullPlayerRef} className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl overflow-y-auto flex flex-col items-center p-4 sm:p-8 pb-28 sm:pb-28">
+          <div className="rb-stagger w-full max-w-4xl my-auto">
             <div className="flex items-center justify-between pb-6 border-b border-white/10">
               <button
                 onClick={() => setIsFullPlayerOpen(false)}
