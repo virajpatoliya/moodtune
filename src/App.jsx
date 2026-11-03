@@ -8,6 +8,15 @@ import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHi
 import { planHistoryUpdate } from './appHistory.js';
 import VolumeControl, { VolumeIcon } from './VolumeControl.jsx';
 import { canSetVolume, MOOD_ACCENTS, readVolume, saveVolume, setLevel, toGain, toggleMute, VOLUME_STEP } from './volume.js';
+import TargetCursor from './components/reactbits/TargetCursor.jsx';
+import ClickSpark from './components/reactbits/ClickSpark.jsx';
+import Magnet from './components/reactbits/Magnet.jsx';
+import TiltedCard from './components/reactbits/TiltedCard.jsx';
+import ShinyText from './components/reactbits/ShinyText.jsx';
+import GradientText from './components/reactbits/GradientText.jsx';
+import Aurora from './components/reactbits/Aurora.jsx';
+import SpotlightCard from './components/reactbits/SpotlightCard.jsx';
+import SlidingPills from './components/reactbits/SlidingPills.jsx';
 import {
   Play,
   Pause,
@@ -102,6 +111,24 @@ const MOOD_PROFILES = [
     bgGlow: 'rgba(6, 182, 212, 0.24)'
   }
 ];
+
+const MOOD_AURORA_COLORS = {
+  happy: ['#f59e0b', '#f43f5e', '#fbbf24'],
+  calm: ['#10b981', '#14b8a6', '#06b6d4'],
+  sad: ['#6366f1', '#8b5cf6', '#38bdf8'],
+  stressed: ['#14b8a6', '#06b6d4', '#6366f1'],
+  romantic: ['#f43f5e', '#ec4899', '#f59e0b'],
+  motivated: ['#06b6d4', '#3b82f6', '#8b5cf6']
+};
+
+const MOOD_SPARK_COLORS = {
+  happy: ['#f59e0b', '#fbbf24', '#f43f5e', '#ffffff'],
+  calm: ['#10b981', '#14b8a6', '#38bdf8', '#ffffff'],
+  sad: ['#818cf8', '#c084fc', '#38bdf8', '#ffffff'],
+  stressed: ['#2dd4bf', '#38bdf8', '#a78bfa', '#ffffff'],
+  romantic: ['#f43f5e', '#fb7185', '#fbbf24', '#ffffff'],
+  motivated: ['#06b6d4', '#3b82f6', '#a855f7', '#ffffff']
+};
 
 const INTENT_PROFILES = [
   {
@@ -650,6 +677,7 @@ export default function App() {
 
   const audioRef = useRef(null);
   const toastTimeoutRef = useRef(null);
+  const mediaActionsRef = useRef(null);
   const searchInputRef = useRef(null);
   const searchDialogRef = useRef(null);
   const quizPanelRef = useRef(null);
@@ -1323,6 +1351,58 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  // Lock-screen, notification and headset controls (Android Chrome, iOS Safari, desktop media keys).
+  useEffect(() => {
+    mediaActionsRef.current = {
+      play: () => setIsPlaying(true),
+      pause: () => setIsPlaying(false),
+      nexttrack: () => handleNextSong(true),
+      previoustrack: () => handlePrevSong(),
+      seekto: (details) => {
+        if (typeof details.seekTime !== 'number') return;
+        setProgressSec(details.seekTime);
+        seekMedia(details.seekTime);
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return undefined;
+    const actions = ['play', 'pause', 'nexttrack', 'previoustrack', 'seekto'];
+    for (const action of actions) {
+      try {
+        navigator.mediaSession.setActionHandler(action, (details) => mediaActionsRef.current?.[action]?.(details));
+      } catch {
+        // Older browsers throw for actions they don't support.
+      }
+    }
+    return () => {
+      for (const action of actions) {
+        try { navigator.mediaSession.setActionHandler(action, null); } catch { /* unsupported */ }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+    if (!currentSong) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    const artwork = currentSong.realCoverUrl || resolvedMedia[currentSong.id]?.artworkUrl;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentSong.title,
+      artist: currentSong.artist,
+      album: 'MoodTune',
+      artwork: artwork ? [{ src: artwork, sizes: '500x500' }] : []
+    });
+  }, [currentSong, resolvedMedia]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = currentSong ? (isPlaying ? 'playing' : 'paused') : 'none';
+  }, [currentSong, isPlaying]);
+
   useEffect(() => {
     const location = { screen, step: quizStep, search: isSearchOpen, player: isFullPlayerOpen, mood: isMoodModalOpen };
     const history = historyRef.current;
@@ -1378,30 +1458,31 @@ export default function App() {
         {MOOD_PROFILES.map((m) => {
           const isActive = currentMood === m.id;
           return (
-            <button
-              key={m.id}
-              aria-pressed={isActive}
-              onClick={() => handleQuickMoodSwitch(m.id)}
-              className={`p-3 rounded-2xl border text-left transition-all flex items-center gap-3 ${
-                isActive
-                  ? `bg-gradient-to-r ${m.cardGradient} text-white border-white/40 shadow-lg scale-[1.02]`
-                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-slate-300'
-              }`}
-            >
-              <div
-                className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                  isActive ? 'bg-black/25 text-white' : 'bg-white/10 text-white'
+            <TiltedCard key={m.id} rotateAmplitude={6} scaleOnHover={1.03} glare={0.2} className="h-full">
+              <button
+                aria-pressed={isActive}
+                onClick={() => handleQuickMoodSwitch(m.id)}
+                className={`p-3 rounded-2xl border text-left transition-all flex items-center gap-3 w-full h-full ${
+                  isActive
+                    ? `bg-gradient-to-r ${m.cardGradient} text-white border-white/40 shadow-lg scale-[1.02]`
+                    : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-slate-300'
                 }`}
               >
-                <Music className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-xs truncate">{m.shortLabel.split('&')[0]}</div>
-                <div className={`text-[10px] truncate ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
-                  {m.vibeTag.split(' ')[0]}
+                <div
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    isActive ? 'bg-black/25 text-white' : 'bg-white/10 text-white'
+                  }`}
+                >
+                  <Music className="w-4 h-4" />
                 </div>
-              </div>
-            </button>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-xs truncate">{m.shortLabel.split('&')[0]}</div>
+                  <div className={`text-[10px] truncate ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
+                    {m.vibeTag.split(' ')[0]}
+                  </div>
+                </div>
+              </button>
+            </TiltedCard>
           );
         })}
       </div>
@@ -1409,7 +1490,11 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-rose-500 selection:text-white relative overflow-x-hidden flex flex-col items-center">
+    <ClickSpark
+      sparkColor={MOOD_SPARK_COLORS[currentMood] || ['#fbbf24', '#f43f5e', '#c084fc', '#38bdf8']}
+      className="min-h-screen bg-slate-950 text-white font-sans selection:bg-rose-500 selection:text-white relative overflow-x-hidden flex flex-col items-center"
+    >
+      <TargetCursor targetSelector="button, a, input, [role='button'], .cursor-target, .mood-tile, .taste-card, .quiz-option" />
       <audio
         ref={audioRef}
         preload="metadata"
@@ -1435,27 +1520,37 @@ export default function App() {
       />
 
       <div
-        className="fixed inset-0 pointer-events-none transition-all duration-1000 z-0"
+        className="fixed inset-0 pointer-events-none transition-all duration-1000 z-0 overflow-hidden"
         style={{
           background: `radial-gradient(circle at 18% 12%, ${moodProfile.bgGlow}, transparent 48%), radial-gradient(circle at 84% 82%, ${moodProfile.bgGlow}, transparent 52%)`
         }}
-      />
+      >
+        <Aurora
+          colorStops={MOOD_AURORA_COLORS[currentMood] || ['#8b5cf6', '#ec4899', '#3b82f6']}
+          amplitude={1.0}
+          speed={0.45}
+          opacity={0.65}
+        />
+        <div className="rb-grain" aria-hidden="true" />
+      </div>
 
       <header className="w-full max-w-6xl px-4 sm:px-6 pt-4 pb-2 flex items-center justify-between text-xs text-slate-300 z-20">
-        <button
-          aria-label="MoodTune home"
-          onClick={() => setScreen('welcome')}
-          className="flex items-center gap-3 text-left cursor-pointer group select-none"
-        >
-          <MoodTuneLogo className="w-9 h-9" />
-          <div className="flex flex-col">
-            <span className="text-base font-extrabold tracking-tight text-white leading-none flex items-center gap-1.5">
-              MoodTune
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            </span>
-            <span className="text-[11px] text-slate-400 font-medium">Your mood. Your music.</span>
-          </div>
-        </button>
+        <Magnet padding={40} magnetStrength={3} maxOffset={8}>
+          <button
+            aria-label="MoodTune home"
+            onClick={() => setScreen('welcome')}
+            className="flex items-center gap-3 text-left cursor-pointer group select-none"
+          >
+            <MoodTuneLogo className="w-9 h-9" />
+            <div className="flex flex-col">
+              <span className="text-base font-extrabold tracking-tight text-white leading-none flex items-center gap-1.5">
+                <GradientText colors={['#ffffff', '#ddd6fe', '#fbcfe8', '#ffffff']} animationSpeed={6}>MoodTune</GradientText>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              </span>
+              <span className="text-[11px] text-slate-400 font-medium">Your mood. Your music.</span>
+            </div>
+          </button>
+        </Magnet>
 
         <div className="flex items-center gap-2 sm:gap-3">
           {screen !== 'home' && (
@@ -1484,16 +1579,18 @@ export default function App() {
           </button>
 
           {screen === 'home' && (
-            <button
-              onClick={() => {
-                setQuizStep(0);
-                setScreen('quiz');
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-white font-medium transition shadow-sm text-xs"
-            >
-              <RefreshCw className="w-3 h-3 text-amber-300" />
-              <span className="hidden sm:inline">Retake Mood Quiz</span>
-            </button>
+            <Magnet padding={35} magnetStrength={3} maxOffset={6}>
+              <button
+                onClick={() => {
+                  setQuizStep(0);
+                  setScreen('quiz');
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-white font-medium transition shadow-sm text-xs"
+              >
+                <RefreshCw className="w-3 h-3 text-amber-300" />
+                <span className="hidden sm:inline">Retake Mood Quiz</span>
+              </button>
+            </Magnet>
           )}
         </div>
       </header>
@@ -1665,33 +1762,41 @@ export default function App() {
               <div className="w-64 h-64 bg-rose-500/15 rounded-full blur-3xl pointer-events-none absolute -top-24 -left-24" />
               <div className="w-64 h-64 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none absolute -bottom-24 -right-24" />
 
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/15 mb-6">
+              <div className="rb-blur-in inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/15 mb-6">
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span className="text-xs font-semibold tracking-wider uppercase text-white/90">
-                  Less scrolling. More feeling.
-                </span>
+                <ShinyText
+                  text="Less scrolling. More feeling."
+                  color="#cbd5e1"
+                  shineColor="#ffffff"
+                  speed={2.6}
+                  className="text-xs font-semibold tracking-wider uppercase text-white/90"
+                />
               </div>
 
-              <h1 className="text-5xl sm:text-7xl font-black tracking-[-0.055em] text-white leading-[1.02] mb-6">
+              <h1 style={{ '--rb-i': 1 }} className="rb-blur-in text-5xl sm:text-7xl font-black tracking-[-0.055em] text-white leading-[1.02] mb-6">
                 Your mood.<br />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-300 via-fuchsia-300 to-orange-200">Your next<br />favorite song.</span>
+                <GradientText colors={['#c4b5fd', '#f472b6', '#fb923c', '#38bdf8', '#c4b5fd']} animationSpeed={6}>
+                  Your next<br />favorite song.
+                </GradientText>
               </h1>
-              <p className="text-base sm:text-lg text-slate-300 max-w-xl mx-auto mb-8 leading-relaxed">
+              <p style={{ '--rb-i': 2 }} className="rb-blur-in text-base sm:text-lg text-slate-300 max-w-xl mx-auto mb-8 leading-relaxed">
                 Turn a little feeling into a whole soundtrack. Discover fresh finds, press play, and let the rest of the world wait.
               </p>
 
-              <div className="flex flex-col sm:flex-row items-center gap-3.5 mb-6">
-                <button
-                  onClick={() => {
-                    setQuizStep(0);
-                    setScreen('quiz');
-                  }}
-                  className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-rose-500 via-amber-500 to-indigo-500 hover:opacity-95 text-white font-bold text-base shadow-xl shadow-rose-500/20 flex items-center justify-center gap-2.5 transition transform hover:scale-[1.02] active:scale-[0.99]"
-                >
-                  <Sparkles className="w-5 h-5" />
-                  <span>Find my sound</span>
-                  <ChevronRight className="w-5 h-5" />
-                </button>
+              <div style={{ '--rb-i': 3 }} className="rb-blur-in flex flex-col sm:flex-row items-center gap-3.5 mb-6">
+                <Magnet padding={60} magnetStrength={2.5} maxOffset={10} wrapperClassName="w-full sm:w-auto">
+                  <button
+                    onClick={() => {
+                      setQuizStep(0);
+                      setScreen('quiz');
+                    }}
+                    className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-rose-500 via-amber-500 to-indigo-500 hover:opacity-95 text-white font-bold text-base shadow-xl shadow-rose-500/20 flex items-center justify-center gap-2.5 transition transform hover:scale-[1.02] active:scale-[0.99]"
+                  >
+                    <Sparkles className="w-5 h-5" />
+                    <span>Find my sound</span>
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </Magnet>
 
                 <button
                   onClick={handleSkipDirectlyToSongs}
@@ -1702,7 +1807,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-5 text-[11px] text-slate-400">
+              <div style={{ '--rb-i': 4 }} className="rb-blur-in flex flex-wrap gap-5 text-[11px] text-slate-400">
                 <span className="flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-violet-300" /> Live music discovery</span>
                 <span className="flex items-center gap-1.5"><Volume2 className="w-3.5 h-3.5 text-rose-300" /> Full songs, no previews</span>
                 <span>3 questions. Your kind of music.</span>
@@ -1729,28 +1834,31 @@ export default function App() {
                   <p className="text-xs text-slate-400 self-end">Pick a mood. Discover something new.</p>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {MOOD_PROFILES.map((mood) => (
-                    <button
-                      key={mood.id}
-                      onClick={() => {
-                        setCurrentMood(mood.id);
-                        setScreen('home');
-                        triggerToast(`Soundscape tuned to ${mood.shortLabel}`);
-                      }}
-                      className={`mood-tile group p-4 rounded-2xl bg-gradient-to-br ${mood.gradient} border border-white/10 hover:border-white/40 transition text-left flex flex-col gap-5`}
-                    >
-                      <div
-                        className={`w-9 h-9 rounded-xl bg-gradient-to-br ${mood.cardGradient} flex items-center justify-center flex-shrink-0 shadow-md group-hover:scale-105 transition`}
+                  {MOOD_PROFILES.map((mood, index) => (
+                    <TiltedCard key={mood.id} rotateAmplitude={8} scaleOnHover={1.03} glare={0.25} className="rb-blur-in h-full rounded-2xl" style={{ '--rb-i': index }}>
+                      <SpotlightCard spotlightColor={`${MOOD_AURORA_COLORS[mood.id][0]}55`} className="h-full rounded-2xl">
+                      <button
+                        onClick={() => {
+                          setCurrentMood(mood.id);
+                          setScreen('home');
+                          triggerToast(`Soundscape tuned to ${mood.shortLabel}`);
+                        }}
+                        className={`mood-tile w-full h-full group p-4 rounded-2xl bg-gradient-to-br ${mood.gradient} border border-white/10 hover:border-white/40 transition text-left flex flex-col gap-5`}
                       >
-                        <Music className="w-4 h-4 text-white" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-semibold text-white leading-relaxed min-h-[2.5em] group-hover:text-amber-200 transition">
-                          {mood.shortLabel}
+                        <div
+                          className={`w-9 h-9 rounded-xl bg-gradient-to-br ${mood.cardGradient} flex items-center justify-center flex-shrink-0 shadow-md group-hover:scale-105 transition`}
+                        >
+                          <Music className="w-4 h-4 text-white" />
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">Discover your mix <ArrowRight className="w-3 h-3" /></div>
-                      </div>
-                    </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-white leading-relaxed min-h-[2.5em] group-hover:text-amber-200 transition">
+                            {mood.shortLabel}
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">Discover your mix <ArrowRight className="w-3 h-3" /></div>
+                        </div>
+                      </button>
+                      </SpotlightCard>
+                    </TiltedCard>
                   ))}
                 </div>
                   <div className="mt-6 flex flex-wrap items-center justify-between gap-3 p-5 rounded-2xl bg-white/[0.03] border border-white/10">
@@ -1918,7 +2026,10 @@ export default function App() {
         {screen === 'home' && (
           <div className="w-full space-y-7 pt-1">
             <div className="flex flex-wrap items-end justify-between gap-3 pt-6">
-              <div><p className="text-[10px] font-bold uppercase tracking-[0.25em] text-violet-300 mb-2">Your own little corner of music</p><h2 className="text-2xl sm:text-3xl font-black tracking-tight">Stay for one more song.</h2></div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-violet-300 mb-2">Your own little corner of music</p>
+                <ShinyText text="Stay for one more song." color="#ffffff" shineColor="#c4b5fd" speed={3.2} className="text-2xl sm:text-3xl font-black tracking-tight" />
+              </div>
               <button onClick={() => setDiscoveryRevision((value) => value + 1)} className="search-chip" disabled={discoveryStatus === 'loading'}><RefreshCw className={`w-3.5 h-3.5 ${discoveryStatus === 'loading' ? 'animate-spin' : ''}`} /> Find a fresh mix</button>
             </div>
             <div
@@ -1958,29 +2069,31 @@ export default function App() {
                   </div>
 
                   <div className="mood-summary-actions flex items-center gap-2 sm:gap-3 pt-1">
-                    <button
-                      onClick={() => {
-                        if (isPlaying) {
-                          setIsPlaying(false);
-                        } else if (recommendations.spotlight) {
-                          handleSelectSong(recommendations.spotlight, true);
-                        }
-                      }}
-                      disabled={!recommendations.spotlight}
-                      className="min-h-11 px-4 sm:px-6 py-3 rounded-2xl bg-white text-slate-950 font-extrabold text-xs sm:text-sm shadow-xl flex items-center justify-center gap-2 hover:bg-amber-100 hover:scale-[1.02] active:scale-[0.98] transition"
-                    >
-                      {isPlaying ? (
-                        <>
-                          <Pause className="w-4 h-4 fill-current" />
-                          <span>Pause Flow</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4 fill-current" />
-                          <span>Play Mood Radio</span>
-                        </>
-                      )}
-                    </button>
+                    <Magnet padding={45} magnetStrength={3} maxOffset={8} wrapperClassName="inline-block">
+                      <button
+                        onClick={() => {
+                          if (isPlaying) {
+                            setIsPlaying(false);
+                          } else if (recommendations.spotlight) {
+                            handleSelectSong(recommendations.spotlight, true);
+                          }
+                        }}
+                        disabled={!recommendations.spotlight}
+                        className="min-h-11 px-4 sm:px-6 py-3 rounded-2xl bg-white text-slate-950 font-extrabold text-xs sm:text-sm shadow-xl flex items-center justify-center gap-2 hover:bg-amber-100 hover:scale-[1.02] active:scale-[0.98] transition"
+                      >
+                        {isPlaying ? (
+                          <>
+                            <Pause className="w-4 h-4 fill-current" />
+                            <span>Pause Flow</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-4 h-4 fill-current" />
+                            <span>Play Mood Radio</span>
+                          </>
+                        )}
+                      </button>
+                    </Magnet>
 
                     <button
                       onClick={() => setIsMoodModalOpen(true)}
@@ -1993,32 +2106,34 @@ export default function App() {
                 </div>
 
                 {recommendations.spotlight && (
-                  <button
-                    type="button"
-                    aria-label={`Play spotlight song ${recommendations.spotlight.title}`}
-                    onClick={() => handleSelectSong(recommendations.spotlight, true)}
-                    className="mood-spotlight flex-shrink-0 group relative cursor-pointer self-center lg:self-auto"
-                  >
-                    <div className="mood-spotlight-art relative p-2 rounded-3xl bg-white/10 border border-white/15 shadow-2xl backdrop-blur-xl group-hover:border-white/30 transition">
-                      <SongCoverArt
-                        song={recommendations.spotlight}
-                        realCoverUrl={resolvedMedia[recommendations.spotlight.id]?.artworkUrl}
-                        size="md"
-                        isPlaying={isPlaying && currentSong?.id === recommendations.spotlight.id}
-                      />
-                      <div className="absolute inset-2 rounded-2xl bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                        <Play className="w-10 h-10 text-white fill-current" />
+                  <TiltedCard rotateAmplitude={12} scaleOnHover={1.03} glare={0.4} className="self-center lg:self-auto">
+                    <button
+                      type="button"
+                      aria-label={`Play spotlight song ${recommendations.spotlight.title}`}
+                      onClick={() => handleSelectSong(recommendations.spotlight, true)}
+                      className="mood-spotlight flex-shrink-0 group relative cursor-pointer block"
+                    >
+                      <div className="mood-spotlight-art relative p-2 rounded-3xl bg-white/10 border border-white/15 shadow-2xl backdrop-blur-xl group-hover:border-white/30 transition">
+                        <SongCoverArt
+                          song={recommendations.spotlight}
+                          realCoverUrl={resolvedMedia[recommendations.spotlight.id]?.artworkUrl}
+                          size="md"
+                          isPlaying={isPlaying && currentSong?.id === recommendations.spotlight.id}
+                        />
+                        <div className="absolute inset-2 rounded-2xl bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                          <Play className="w-10 h-10 text-white fill-current" />
+                        </div>
                       </div>
-                    </div>
-                    <div className="mood-spotlight-caption text-center mt-2">
-                      <div className="mood-spotlight-title text-[11px] font-bold text-white truncate max-w-[130px] mx-auto">
-                        {recommendations.spotlight.title}
-                          </div>
-                      <div className="text-[10px] text-slate-400 truncate max-w-[130px] mx-auto">
-                        Your discovery spotlight
+                      <div className="mood-spotlight-caption text-center mt-2">
+                        <div className="mood-spotlight-title text-[11px] font-bold text-white truncate max-w-[130px] mx-auto">
+                          {recommendations.spotlight.title}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate max-w-[130px] mx-auto">
+                          Your discovery spotlight
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                  </TiltedCard>
                 )}
               </div>
             </div>
@@ -2037,22 +2152,13 @@ export default function App() {
                   </p>
                 </div>
 
-                <div role="group" aria-label="Song language" className="m-rail flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                  {LANGUAGE_CHIPS.map((lang) => (
-                    <button
-                      key={lang}
-                      aria-pressed={activeLangFilter === lang}
-                      onClick={() => setActiveLangFilter(lang)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition flex-shrink-0 ${
-                        activeLangFilter === lang
-                          ? 'bg-white text-slate-950 shadow-md'
-                          : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10'
-                      }`}
-                    >
-                      {lang}
-                    </button>
-                  ))}
-                </div>
+                <SlidingPills
+                  options={LANGUAGE_CHIPS}
+                  value={activeLangFilter}
+                  onChange={setActiveLangFilter}
+                  ariaLabel="Song language"
+                  className="no-scrollbar self-start sm:self-auto"
+                />
               </div>
 
               <div className="m-rail flex flex-wrap gap-2 items-center">
@@ -2080,67 +2186,74 @@ export default function App() {
                   const isLiked = likedSongIds.includes(song.id);
 
                   return (
-                    <div
+                    <TiltedCard
                       key={song.id}
-                      onClick={() => handleSelectSong(song, true)}
-                      className={`group p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 relative overflow-hidden ${
-                        isCurrent
-                          ? 'bg-white/15 border-white/40 shadow-xl ring-1 ring-white/20'
-                          : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/10'
-                      }`}
+                      rotateAmplitude={6}
+                      scaleOnHover={1.02}
+                      glare={0.2}
+                      className="h-full"
                     >
-                      <div className="relative flex-shrink-0">
-                        <SongCoverArt
-                          song={song}
-                          realCoverUrl={resolvedMedia[song.id]?.artworkUrl}
-                          size="sm"
-                          isPlaying={isCurrent && isPlaying}
-                        />
-                        <button
-                          type="button"
-                          aria-label={`${isCurrent && isPlaying ? 'Pause' : 'Play'} ${song.title}`}
-                          onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true); }}
-                          className={`absolute inset-0 rounded-xl bg-black/45 flex items-center justify-center transition focus:opacity-100 ${
-                            isCurrent ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                          }`}
-                        >
-                          {isCurrent && isPlaying ? (
-                            <Pause className="w-5 h-5 text-white fill-current" />
-                          ) : (
-                            <Play className="w-5 h-5 text-white fill-current ml-0.5" />
-                          )}
-                        </button>
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-sm text-white truncate group-hover:text-amber-200 transition">
-                            {song.title}
-                          </h3>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-slate-300 flex-shrink-0">
-                            {song.language}
-                          </span>
+                      <div
+                        onClick={() => handleSelectSong(song, true)}
+                        className={`group p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 relative overflow-hidden h-full ${
+                          isCurrent
+                            ? 'bg-white/15 border-white/40 shadow-xl ring-1 ring-white/20'
+                            : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/10'
+                        }`}
+                      >
+                        <div className="relative flex-shrink-0">
+                          <SongCoverArt
+                            song={song}
+                            realCoverUrl={resolvedMedia[song.id]?.artworkUrl}
+                            size="sm"
+                            isPlaying={isCurrent && isPlaying}
+                          />
+                          <button
+                            type="button"
+                            aria-label={`${isCurrent && isPlaying ? 'Pause' : 'Play'} ${song.title}`}
+                            onClick={(event) => { event.stopPropagation(); handleSelectSong(song, true); }}
+                            className={`absolute inset-0 rounded-xl bg-black/45 flex items-center justify-center transition focus:opacity-100 ${
+                              isCurrent ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                            }`}
+                          >
+                            {isCurrent && isPlaying ? (
+                              <Pause className="w-5 h-5 text-white fill-current" />
+                            ) : (
+                              <Play className="w-5 h-5 text-white fill-current ml-0.5" />
+                            )}
+                          </button>
                         </div>
-                        <p className="text-xs text-slate-300 truncate mt-0.5">{song.artist}</p>
-                        <p className="text-[11px] text-slate-400 line-clamp-1 mt-1">
-                          {song.matchWhy}
-                        </p>
-                      </div>
 
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={(e) => handleToggleLike(song.id, e)}
-                          className={`p-2 rounded-xl transition ${
-                            isLiked
-                              ? 'text-rose-400 bg-rose-500/15'
-                              : 'text-slate-400 hover:text-white hover:bg-white/10'
-                          }`}
-                          title="Favorite"
-                        >
-                          <Heart className={`w-4 h-4 ${isLiked ? 'fill-current' : ''}`} />
-                        </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-sm text-white truncate group-hover:text-amber-200 transition">
+                              {song.title}
+                            </h3>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-slate-300 flex-shrink-0">
+                              {song.language}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-300 truncate mt-0.5">{song.artist}</p>
+                          <p className="text-[11px] text-slate-400 line-clamp-1 mt-1">
+                            {song.matchWhy}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={(e) => handleToggleLike(song.id, e)}
+                            className={`p-2 rounded-xl transition ${
+                              isLiked
+                                ? 'text-rose-400 bg-rose-500/15'
+                                : 'text-slate-400 hover:text-white hover:bg-white/10'
+                            }`}
+                            title="Favorite"
+                          >
+                            <Heart className={`w-4 h-4 ${isLiked ? 'fill-current' : ''}`} />
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    </TiltedCard>
                   );
                 })}
               </div>
@@ -2752,6 +2865,6 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+    </ClickSpark>
   );
 }
