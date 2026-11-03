@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { REDUCED_MOTION_QUERY } from './motion.js';
 
 const VERTEX_SHADER = `#version 300 es
 in vec2 aPosition;
@@ -95,6 +96,15 @@ const parseColor = (hex) => {
   return [0.5, 0.2, 0.9];
 };
 
+// Phones and low-end machines get a lighter render: the aurora is a soft blur, so a
+// lower-resolution buffer stretched by CSS looks the same and costs a fraction of the GPU.
+const isConstrained = () => {
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const cores = navigator.hardwareConcurrency || 8;
+  const memory = navigator.deviceMemory || 8;
+  return coarse || cores <= 4 || memory <= 4;
+};
+
 export default function Aurora({
   colorStops = ['#8b5cf6', '#ec4899', '#3b82f6'],
   amplitude = 1.0,
@@ -104,6 +114,14 @@ export default function Aurora({
   style
 }) {
   const canvasRef = useRef(null);
+  // Props live in a ref so a mood change blends the colours instead of rebuilding the GL program.
+  const propsRef = useRef({ colorStops, amplitude, speed, opacity });
+  const wakeRef = useRef(null);
+
+  useEffect(() => {
+    propsRef.current = { colorStops, amplitude, speed, opacity };
+    wakeRef.current?.();
+  }, [colorStops, amplitude, speed, opacity]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -117,6 +135,7 @@ export default function Aurora({
       powerPreference: 'low-power'
     });
 
+    // No WebGL2: the CSS radial glow behind the canvas is the fallback.
     if (!gl) return;
 
     const createShader = (type, source) => {
@@ -151,13 +170,28 @@ export default function Aurora({
 
     const uRes = gl.getUniformLocation(program, 'uResolution');
     const uTime = gl.getUniformLocation(program, 'uTime');
-    const uC1 = gl.getUniformLocation(program, 'uColor1');
-    const uC2 = gl.getUniformLocation(program, 'uColor2');
-    const uC3 = gl.getUniformLocation(program, 'uColor3');
+    const uColors = [
+      gl.getUniformLocation(program, 'uColor1'),
+      gl.getUniformLocation(program, 'uColor2'),
+      gl.getUniformLocation(program, 'uColor3')
+    ];
     const uAmp = gl.getUniformLocation(program, 'uAmplitude');
     const uSpd = gl.getUniformLocation(program, 'uSpeed');
     const uPtr = gl.getUniformLocation(program, 'uPointer');
     const uOp = gl.getUniformLocation(program, 'uOpacity');
+
+    gl.useProgram(program);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    const reducedQuery = window.matchMedia(REDUCED_MOTION_QUERY);
+    const constrained = isConstrained();
+    const renderScale = constrained ? 0.5 : 0.75;
+    const frameInterval = constrained ? 1000 / 30 : 0;
+
+    const fallback = ['#8b5cf6', '#ec4899', '#3b82f6'];
+    const targetColors = () => fallback.map((c, i) => parseColor(propsRef.current.colorStops?.[i] || c));
+    const colors = targetColors();
 
     let mouseX = 0.5;
     let mouseY = 0.5;
@@ -172,69 +206,101 @@ export default function Aurora({
       }
     };
 
-    window.addEventListener('mousemove', onMouseMove, { passive: true });
-
-    let raf;
-    let lastTime = performance.now();
+    let raf = 0;
+    let lastTime = 0;
+    let lastDraw = 0;
     let clock = 0;
 
     const resize = () => {
       const width = canvas.parentElement?.clientWidth || window.innerWidth;
       const height = canvas.parentElement?.clientHeight || window.innerHeight;
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * renderScale;
+      canvas.width = Math.max(1, Math.round(width * dpr));
+      canvas.height = Math.max(1, Math.round(height * dpr));
       gl.viewport(0, 0, canvas.width, canvas.height);
+      draw();
     };
 
-    window.addEventListener('resize', resize, { passive: true });
-    resize();
-
-    const loop = (now) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
-      lastTime = now;
-      clock += dt;
-
+    // Returns true while colours are still blending toward the current mood.
+    function draw() {
+      const p = propsRef.current;
+      const target = targetColors();
+      let blending = false;
+      for (let i = 0; i < 3; i++) {
+        for (let k = 0; k < 3; k++) {
+          const diff = target[i][k] - colors[i][k];
+          if (Math.abs(diff) > 0.002) blending = true;
+          colors[i][k] += diff * 0.06;
+        }
+        gl.uniform3f(uColors[i], colors[i][0], colors[i][1], colors[i][2]);
+      }
       currentMouseX += (mouseX - currentMouseX) * 0.08;
       currentMouseY += (mouseY - currentMouseY) * 0.08;
 
-      gl.useProgram(program);
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, clock);
-
-      const c1 = parseColor(colorStops[0] || '#8b5cf6');
-      const c2 = parseColor(colorStops[1] || '#ec4899');
-      const c3 = parseColor(colorStops[2] || '#3b82f6');
-
-      gl.uniform3f(uC1, c1[0], c1[1], c1[2]);
-      gl.uniform3f(uC2, c2[0], c2[1], c2[2]);
-      gl.uniform3f(uC3, c3[0], c3[1], c3[2]);
-
-      gl.uniform1f(uAmp, amplitude);
-      gl.uniform1f(uSpd, speed);
+      gl.uniform1f(uAmp, p.amplitude);
+      gl.uniform1f(uSpd, p.speed);
       gl.uniform2f(uPtr, currentMouseX, currentMouseY);
-      gl.uniform1f(uOp, opacity);
-
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-
+      gl.uniform1f(uOp, p.opacity);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+      return blending;
+    }
 
-      raf = requestAnimationFrame(loop);
+    const loop = (now) => {
+      raf = 0;
+      if (document.hidden) return;
+      const reduced = reducedQuery.matches;
+      if (!lastTime) lastTime = now;
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+      if (!reduced) clock += dt;
+
+      let blending = true;
+      if (now - lastDraw >= frameInterval) {
+        lastDraw = now;
+        blending = draw();
+      }
+      // Reduced motion: hold a still frame, waking only to blend to a new mood's colours.
+      if (!reduced || blending) raf = requestAnimationFrame(loop);
+      else lastTime = 0;
     };
 
-    raf = requestAnimationFrame(loop);
+    const wake = () => {
+      if (!raf && !document.hidden) raf = requestAnimationFrame(loop);
+    };
+    wakeRef.current = wake;
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        lastTime = 0;
+      } else {
+        wake();
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    window.addEventListener('resize', resize, { passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    reducedQuery.addEventListener('change', wake);
+    resize();
+    wake();
 
     return () => {
       cancelAnimationFrame(raf);
+      wakeRef.current = null;
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('resize', resize);
+      document.removeEventListener('visibilitychange', onVisibility);
+      reducedQuery.removeEventListener('change', wake);
       gl.deleteProgram(program);
       gl.deleteShader(vs);
       gl.deleteShader(fs);
       gl.deleteBuffer(posBuffer);
     };
-  }, [colorStops, amplitude, speed, opacity]);
+  }, []);
 
   return (
     <canvas

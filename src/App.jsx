@@ -15,6 +15,8 @@ import TiltedCard from './components/reactbits/TiltedCard.jsx';
 import ShinyText from './components/reactbits/ShinyText.jsx';
 import GradientText from './components/reactbits/GradientText.jsx';
 import Aurora from './components/reactbits/Aurora.jsx';
+import SpotlightCard from './components/reactbits/SpotlightCard.jsx';
+import SlidingPills from './components/reactbits/SlidingPills.jsx';
 import {
   Play,
   Pause,
@@ -169,6 +171,9 @@ const LANGUAGE_PROFILES = [
   { id: 'Instrumental', label: 'Instrumental', badge: 'Instrumental', sub: 'Piano melodies, atmospheric electronics & wordless listening' },
   { id: 'Surprise', label: 'Surprise me / Multilingual mix', badge: 'Multilingual', sub: 'A blend across languages, curated for your listening goal' }
 ];
+
+const LANGUAGE_CHIPS = ['All', 'Hindi', 'English', 'Gujarati', 'Punjabi', 'Instrumental'];
+const languageChip = (language) => (LANGUAGE_CHIPS.includes(language) ? language : 'All');
 
 const PUBLIC_FALLBACK_AUDIO = {
   chill: 'https://codeskulptor-demos.commondatastorage.googleapis.com/descent/background%20music.mp3',
@@ -672,6 +677,7 @@ export default function App() {
 
   const audioRef = useRef(null);
   const toastTimeoutRef = useRef(null);
+  const mediaActionsRef = useRef(null);
   const searchInputRef = useRef(null);
   const searchDialogRef = useRef(null);
   const quizPanelRef = useRef(null);
@@ -686,7 +692,7 @@ export default function App() {
   const radioPlayedRef = useRef(new Set());
   const playbackStateRef = useRef({ activeSong, dislikedSongIds });
   useEffect(() => { playbackStateRef.current = { activeSong, dislikedSongIds }; }, [activeSong, dislikedSongIds]);
-  const discoveryLanguage = activeLangFilter === 'All' ? currentLanguage : activeLangFilter;
+  const discoveryLanguage = activeLangFilter;
   const preferenceKey = `${currentMood}:${currentIntent}:${discoveryLanguage}`;
   const discoveryKey = `${currentMood}:${currentIntent}:${discoveryLanguage}:${discoveryRevision}`;
   const discoveryEnabled = !['welcome', 'quiz', 'analyzing'].includes(screen);
@@ -1309,7 +1315,7 @@ export default function App() {
 
   const finishQuizWithLang = (langChoice) => {
     setCurrentLanguage(langChoice);
-    setActiveLangFilter('All');
+    setActiveLangFilter(languageChip(langChoice));
     setScreen('analyzing');
     clearTimeout(analyzingTimeoutRef.current);
     analyzingTimeoutRef.current = setTimeout(() => {
@@ -1344,6 +1350,58 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Lock-screen, notification and headset controls (Android Chrome, iOS Safari, desktop media keys).
+  useEffect(() => {
+    mediaActionsRef.current = {
+      play: () => setIsPlaying(true),
+      pause: () => setIsPlaying(false),
+      nexttrack: () => handleNextSong(true),
+      previoustrack: () => handlePrevSong(),
+      seekto: (details) => {
+        if (typeof details.seekTime !== 'number') return;
+        setProgressSec(details.seekTime);
+        seekMedia(details.seekTime);
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return undefined;
+    const actions = ['play', 'pause', 'nexttrack', 'previoustrack', 'seekto'];
+    for (const action of actions) {
+      try {
+        navigator.mediaSession.setActionHandler(action, (details) => mediaActionsRef.current?.[action]?.(details));
+      } catch {
+        // Older browsers throw for actions they don't support.
+      }
+    }
+    return () => {
+      for (const action of actions) {
+        try { navigator.mediaSession.setActionHandler(action, null); } catch { /* unsupported */ }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+    if (!currentSong) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    const artwork = currentSong.realCoverUrl || resolvedMedia[currentSong.id]?.artworkUrl;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentSong.title,
+      artist: currentSong.artist,
+      album: 'MoodTune',
+      artwork: artwork ? [{ src: artwork, sizes: '500x500' }] : []
+    });
+  }, [currentSong, resolvedMedia]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = currentSong ? (isPlaying ? 'playing' : 'paused') : 'none';
+  }, [currentSong, isPlaying]);
 
   useEffect(() => {
     const location = { screen, step: quizStep, search: isSearchOpen, player: isFullPlayerOpen, mood: isMoodModalOpen };
@@ -1383,10 +1441,8 @@ export default function App() {
     return 'Good evening';
   }, []);
 
-  const filteredMadeForMood = useMemo(() => {
-    return recommendations.madeForMood
-      .filter((s) => activeLangFilter === 'All' || s.language.toLowerCase() === activeLangFilter.toLowerCase());
-  }, [recommendations, activeLangFilter]);
+  // Songs are already fetched for the selected language chip.
+  const filteredMadeForMood = recommendations.madeForMood;
 
   const quickMoodShift = (
     <div className="space-y-2.5">
@@ -1475,6 +1531,7 @@ export default function App() {
           speed={0.45}
           opacity={0.65}
         />
+        <div className="rb-grain" aria-hidden="true" />
       </div>
 
       <header className="w-full max-w-6xl px-4 sm:px-6 pt-4 pb-2 flex items-center justify-between text-xs text-slate-300 z-20">
@@ -1705,7 +1762,7 @@ export default function App() {
               <div className="w-64 h-64 bg-rose-500/15 rounded-full blur-3xl pointer-events-none absolute -top-24 -left-24" />
               <div className="w-64 h-64 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none absolute -bottom-24 -right-24" />
 
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/15 mb-6">
+              <div className="rb-blur-in inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/15 mb-6">
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <ShinyText
                   text="Less scrolling. More feeling."
@@ -1716,17 +1773,17 @@ export default function App() {
                 />
               </div>
 
-              <h1 className="text-5xl sm:text-7xl font-black tracking-[-0.055em] text-white leading-[1.02] mb-6">
+              <h1 style={{ '--rb-i': 1 }} className="rb-blur-in text-5xl sm:text-7xl font-black tracking-[-0.055em] text-white leading-[1.02] mb-6">
                 Your mood.<br />
                 <GradientText colors={['#c4b5fd', '#f472b6', '#fb923c', '#38bdf8', '#c4b5fd']} animationSpeed={6}>
                   Your next<br />favorite song.
                 </GradientText>
               </h1>
-              <p className="text-base sm:text-lg text-slate-300 max-w-xl mx-auto mb-8 leading-relaxed">
+              <p style={{ '--rb-i': 2 }} className="rb-blur-in text-base sm:text-lg text-slate-300 max-w-xl mx-auto mb-8 leading-relaxed">
                 Turn a little feeling into a whole soundtrack. Discover fresh finds, press play, and let the rest of the world wait.
               </p>
 
-              <div className="flex flex-col sm:flex-row items-center gap-3.5 mb-6">
+              <div style={{ '--rb-i': 3 }} className="rb-blur-in flex flex-col sm:flex-row items-center gap-3.5 mb-6">
                 <Magnet padding={60} magnetStrength={2.5} maxOffset={10} wrapperClassName="w-full sm:w-auto">
                   <button
                     onClick={() => {
@@ -1750,7 +1807,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-5 text-[11px] text-slate-400">
+              <div style={{ '--rb-i': 4 }} className="rb-blur-in flex flex-wrap gap-5 text-[11px] text-slate-400">
                 <span className="flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-violet-300" /> Live music discovery</span>
                 <span className="flex items-center gap-1.5"><Volume2 className="w-3.5 h-3.5 text-rose-300" /> Full songs, no previews</span>
                 <span>3 questions. Your kind of music.</span>
@@ -1777,8 +1834,9 @@ export default function App() {
                   <p className="text-xs text-slate-400 self-end">Pick a mood. Discover something new.</p>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {MOOD_PROFILES.map((mood) => (
-                    <TiltedCard key={mood.id} rotateAmplitude={8} scaleOnHover={1.03} glare={0.25} className="h-full">
+                  {MOOD_PROFILES.map((mood, index) => (
+                    <TiltedCard key={mood.id} rotateAmplitude={8} scaleOnHover={1.03} glare={0.25} className="rb-blur-in h-full rounded-2xl" style={{ '--rb-i': index }}>
+                      <SpotlightCard spotlightColor={`${MOOD_AURORA_COLORS[mood.id][0]}55`} className="h-full rounded-2xl">
                       <button
                         onClick={() => {
                           setCurrentMood(mood.id);
@@ -1799,6 +1857,7 @@ export default function App() {
                           <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">Discover your mix <ArrowRight className="w-3 h-3" /></div>
                         </div>
                       </button>
+                      </SpotlightCard>
                     </TiltedCard>
                   ))}
                 </div>
@@ -2093,6 +2152,13 @@ export default function App() {
                   </p>
                 </div>
 
+                <SlidingPills
+                  options={LANGUAGE_CHIPS}
+                  value={activeLangFilter}
+                  onChange={setActiveLangFilter}
+                  ariaLabel="Song language"
+                  className="no-scrollbar self-start sm:self-auto"
+                />
               </div>
 
               <div className="m-rail flex flex-wrap gap-2 items-center">
@@ -2761,7 +2827,7 @@ export default function App() {
                     key={lang.id}
                     onClick={() => {
                       setCurrentLanguage(lang.id);
-                      setActiveLangFilter('All');
+                      setActiveLangFilter(languageChip(lang.id));
                     }}
                     className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition ${
                       currentLanguage === lang.id

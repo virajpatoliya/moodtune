@@ -12,20 +12,23 @@ const CACHE_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 9000;
 const BUSY_MESSAGE = 'Song search is busy right now. Please try again in a moment.';
 
+// JioSaavn playlist search is keyword-based and coverage differs per language
+// (e.g. "gujarati chill" finds nothing), so each mood tries several words in order.
 const MOOD_WORDS = {
-  happy: 'happy',
-  calm: 'chill',
-  sad: 'sad',
-  stressed: 'relaxing',
-  romantic: 'romantic',
-  motivated: 'motivational',
+  happy: ['happy', 'party', 'dance'],
+  calm: ['chill', 'lofi', 'acoustic', 'relaxing'],
+  sad: ['sad', 'heartbreak', 'romantic'],
+  stressed: ['chill', 'lofi', 'relaxing', 'acoustic'],
+  romantic: ['romantic', 'love'],
+  motivated: ['workout', 'party', 'dance'],
 };
 const INTENT_WORDS = {
-  uplift: 'happy',
-  relax: 'chill',
-  energetic: 'party',
-  meaningful: 'soulful',
+  uplift: ['happy', 'party', 'dance'],
+  relax: ['chill', 'lofi', 'relaxing'],
+  energetic: ['party', 'workout', 'dance'],
+  meaningful: ['soulful', 'ghazal', 'sad', 'romantic'],
 };
+const FALLBACK_WORDS = ['hits'];
 const LANGUAGE_WORDS = {
   Hindi: ['hindi'],
   English: ['english'],
@@ -33,12 +36,14 @@ const LANGUAGE_WORDS = {
   Punjabi: ['punjabi'],
   Instrumental: ['instrumental'],
   Surprise: ['hindi', 'english'],
+  All: ['hindi', 'english', 'punjabi', 'gujarati'],
 };
 // Re-recordings that are rarely what someone searching a song title wants.
 const VARIANT_PATTERN = /\b(karaoke|instrumental|cover|remix|lofi|lo-fi|slowed|reverb|nightcore|sped up|8d|unplugged|mashup|version|flip|techno|ambient)\b/i;
 
 export function decodeEntities(text = '') {
   return String(text)
+    .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;|&apos;/g, "'")
     .replace(/&amp;/g, '&')
@@ -198,36 +203,109 @@ async function playlistSongs(playlist, signal, options, fetcher, limit = 30) {
   return normalizeSaavnSongs(data?.songs, { ...options, reason: `From JioSaavn's "${name}" playlist.` });
 }
 
-export function moodPlaylistQueries({ mood, intent, language }) {
-  const word = (intent && INTENT_WORDS[intent]) || MOOD_WORDS[mood] || 'chill';
-  return (LANGUAGE_WORDS[language] || LANGUAGE_WORDS.Surprise).map((lang) => (lang === 'instrumental' ? `${word} instrumental` : `${word} ${lang}`));
+function moodWords({ mood, intent }) {
+  const words = [...((intent && INTENT_WORDS[intent]) || []), ...(MOOD_WORDS[mood] || MOOD_WORDS.calm)];
+  return [...new Set(words)].slice(0, 3);
 }
 
-async function moodPlaylists(preferences, revision, signal, fetcher, perQuery = 1) {
-  const searches = await Promise.allSettled(moodPlaylistQueries(preferences).map((query) => fetchSaavn('/search/playlists', { query, limit: '10' }, signal, { fetcher })));
-  const picks = [];
-  searches.forEach((result) => {
-    const list = result.status === 'fulfilled' ? (result.value.results || []).filter((item) => item.url) : [];
-    for (let i = 0; i < Math.min(perQuery, list.length); i += 1) picks.push(list[(Math.abs(revision) + i) % list.length]);
-  });
-  if (!picks.length) {
-    const failure = searches.find((result) => result.status === 'rejected');
-    if (failure) throw failure.reason;
+// One ordered list of queries per language, most specific first.
+export function moodPlaylistQueries({ mood, intent, language }) {
+  const words = moodWords({ mood, intent });
+  return (LANGUAGE_WORDS[language] || LANGUAGE_WORDS.Surprise).map((lang) => [
+    ...words.map((word) => `${lang} ${word}`),
+    ...FALLBACK_WORDS.map((word) => `${lang} ${word}`),
+  ]);
+}
+
+const sameLanguage = (playlist, lang) => lang === 'instrumental'
+  || playlist.language === lang
+  || titleKey(playlist.name).includes(lang);
+
+// Candidate playlists for each language, best match first and rotated by revision.
+async function moodPlaylistCandidates(preferences, revision, signal, fetcher) {
+  const perLanguage = moodPlaylistQueries(preferences);
+  const languages = LANGUAGE_WORDS[preferences.language] || LANGUAGE_WORDS.Surprise;
+  let failure = null;
+  const lists = await Promise.all(perLanguage.map(async (queries, index) => {
+    const results = await Promise.allSettled(queries.map((query) => fetchSaavn('/search/playlists', { query, limit: '10' }, signal, { fetcher })));
+    const seen = new Set();
+    const list = [];
+    results.forEach((result) => {
+      if (result.status === 'rejected') { failure ||= result.reason; return; }
+      (result.value.results || []).forEach((item) => {
+        if (item.url && !seen.has(item.id) && sameLanguage(item, languages[index])) {
+          seen.add(item.id);
+          list.push(item);
+        }
+      });
+    });
+    const shift = list.length ? Math.abs(revision) % list.length : 0;
+    return [...list.slice(shift), ...list.slice(0, shift)];
+  }));
+  if (lists.every((list) => !list.length) && failure) throw failure;
+  return lists;
+}
+
+// Some playlists come back empty, so keep fetching candidates until each
+// language has enough non-empty playlists.
+async function songsFromCandidates(candidates, wanted, signal, options, fetcher) {
+  const groups = [];
+  let failure = null;
+  for (let start = 0; start < candidates.length && groups.length < wanted && start < 6; start += wanted) {
+    const batch = candidates.slice(start, start + wanted);
+    const results = await Promise.allSettled(batch.map((playlist) => playlistSongs(playlist, signal, options, fetcher)));
+    results.forEach((result) => {
+      if (result.status === 'rejected') failure ||= result.reason;
+      else if (result.value.length && groups.length < wanted) groups.push(result.value);
+    });
   }
-  return picks;
+  return { groups, failure };
+}
+
+const MIN_PLAYLIST_SONGS = 6;
+
+// Some catalogs (notably English) only have near-empty playlists in the open
+// API, so top those languages up with a mood-word song search instead.
+async function moodSearchSongs(preferences, lang, revision, signal, options, fetcher) {
+  const words = moodWords(preferences);
+  const word = words[Math.abs(revision) % words.length];
+  const data = await fetchSaavn('/search/songs', { query: `${word} ${lang}`, limit: '30' }, signal, { fetcher });
+  const songs = normalizeSaavnSongs(data?.results, { ...options, reason: `A ${word} ${capitalize(lang)} pick from JioSaavn.` });
+  const matching = lang === 'instrumental' ? songs : songs.filter((song) => song.language.toLowerCase() === lang);
+  return matching.sort((a, b) => (b.playCount || 0) - (a.playCount || 0));
+}
+
+async function moodPlaylistSongs(preferences, revision, signal, fetcher, options) {
+  const lists = await moodPlaylistCandidates(preferences, revision, signal, fetcher);
+  const languages = LANGUAGE_WORDS[preferences.language] || LANGUAGE_WORDS.Surprise;
+  const wanted = lists.length > 1 ? 1 : 2;
+  const results = await Promise.all(lists.map(async (list, index) => {
+    const result = await songsFromCandidates(list, wanted, signal, options, fetcher);
+    if (result.groups.flat().length >= MIN_PLAYLIST_SONGS) return result;
+    try {
+      const extra = await moodSearchSongs(preferences, languages[index], revision, signal, options, fetcher);
+      if (extra.length) result.groups.push(extra);
+    } catch (error) {
+      result.failure ||= error;
+    }
+    return result;
+  }));
+  const groups = results.flatMap((result) => result.groups);
+  if (!groups.length) {
+    const failure = results.find((result) => result.failure)?.failure;
+    throw failure || new Error('No full songs found for this mood right now.');
+  }
+  return groups;
 }
 
 export async function fetchSaavnMoodMix({ mood, intent, language }, revision = 0, signal, { fetcher } = {}) {
-  const playlists = await moodPlaylists({ mood, intent, language }, revision, signal, fetcher, language === 'Surprise' || !LANGUAGE_WORDS[language] ? 1 : 2);
-  const results = await Promise.allSettled(playlists.map((playlist) => playlistSongs(playlist, signal, { mood, intent }, fetcher)));
-  const groups = results.map((result) => (result.status === 'fulfilled' ? result.value : []));
-  if (groups.every((group) => !group.length)) {
-    const failure = results.find((result) => result.status === 'rejected');
-    throw failure ? failure.reason : new Error('No full songs found for this mood right now.');
-  }
+  const groups = await moodPlaylistSongs({ mood, intent, language }, revision, signal, fetcher, { mood, intent });
   // Rotate within the playlists so "Find a fresh mix" isn't the same top 12.
-  const offset = (Math.abs(revision) * 5) % Math.max(1, Math.min(...groups.filter((group) => group.length).map((group) => group.length)));
-  return dedupe(interleave(groups.map((group) => [...group.slice(offset), ...group.slice(0, offset)]))).slice(0, SAAVN_MIX_SIZE);
+  const shift = Math.abs(revision) * 5;
+  return dedupe(interleave(groups.map((group) => {
+    const offset = shift % Math.max(1, group.length);
+    return [...group.slice(offset), ...group.slice(0, offset)];
+  }))).slice(0, SAAVN_MIX_SIZE);
 }
 
 export async function fetchSaavnSuggestions(seedSongs, { excludeIds = [], mood, intent, revision = 0 } = {}, signal, { fetcher } = {}) {
@@ -268,9 +346,8 @@ export async function fetchSaavnRadio(seed, { excludeIds = [], mood, intent, lan
   const leadName = seed.artist.split(',')[0].trim();
   const requests = [
     firstArtist ? artistSongs(firstArtist, 0, signal, { mood }, `More from ${leadName}.`, fetcher) : Promise.resolve([]),
-    moodPlaylists({ mood, intent, language: language || capitalize(seed.language) }, Math.floor(Math.random() * 5), signal, fetcher)
-      .then((lists) => Promise.all(lists.map((list) => playlistSongs(list, signal, { mood }, fetcher))))
-      .then((lists) => lists.flat().map((song) => ({ ...song, baseReason: `${song.baseReason} Fits your ${mood || 'current'} mood.` }))),
+    moodPlaylistSongs({ mood, intent, language: !language || language === 'All' ? capitalize(seed.language) : language }, Math.floor(Math.random() * 5), signal, fetcher, { mood })
+      .then((groups) => interleave(groups).map((song) => ({ ...song, baseReason: `${song.baseReason} Fits your ${mood || 'current'} mood.` }))),
     secondArtist ? artistSongs(secondArtist, 0, signal, { mood }, `More from ${seed.artist.split(',')[1]?.trim() || 'a featured artist'}.`, fetcher) : Promise.resolve([]),
     firstArtist ? artistSongs(firstArtist, 1, signal, { mood }, `More from ${leadName}.`, fetcher) : Promise.resolve([]),
     seed.saavnAlbumId ? fetchSaavn('/albums', { id: seed.saavnAlbumId }, signal, { fetcher })

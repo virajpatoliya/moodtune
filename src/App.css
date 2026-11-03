@@ -436,8 +436,11 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.mood-tile:hover {
-  transform: translateY(-5px);
+/* Hover lift only for real hover devices; on phones a tap would leave the tile stuck up. */
+@media (hover: hover) and (pointer: fine) {
+  .mood-tile:hover {
+    transform: translateY(-5px);
+  }
 }
 
 @keyframes sound-wave {
@@ -865,4 +868,176 @@ button:disabled {
   color: #fff;
   background: linear-gradient(90deg, #7e1bcc, #cc0fe0);
   box-shadow: 0 4px 14px -4px #cc0fe0;
+}
+
+/* ---- React Bits effects: CSS-driven parts ---- */
+
+.rb-shiny {
+  background-size: 250% 100%;
+  animation: rb-shiny-sweep var(--rb-shiny-duration, 3s) linear infinite;
+}
+
+@keyframes rb-shiny-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+
+.rb-gradient {
+  background-size: 200% 100%;
+  animation: rb-gradient-flow var(--rb-gradient-duration, 6s) linear infinite;
+}
+
+@keyframes rb-gradient-flow {
+  from { background-position: 0% 50%; }
+  to { background-position: 100% 50%; }
+}
+
+/* Blur-in entrance (React Bits BlurText style); stagger with style="--rb-i: n". */
+.rb-blur-in {
+  /* backwards, not both: a held final transform would override TiltedCard's inline transform. */
+  animation: rb-blur-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--rb-i, 0) * 70ms);
+}
+
+@keyframes rb-blur-in {
+  from { opacity: 0; filter: blur(10px); transform: translateY(10px); }
+  to { opacity: 1; filter: blur(0); transform: none; }
+}
+
+/* Spotlight card: a soft light follows the pointer, or the finger while pressed. */
+.rb-spotlight {
+  position: relative;
+  isolation: isolate;
+}
+
+.rb-spotlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    220px circle at var(--rb-x, 50%) var(--rb-y, 50%),
+    var(--rb-spot, rgba(255, 255, 255, 0.18)),
+    transparent 70%
+  );
+  transition: opacity 0.35s ease;
+}
+
+.rb-spotlight[data-lit]::after,
+.rb-spotlight:focus-within::after {
+  opacity: 1;
+}
+
+/* Static film grain over the aurora: one tiny SVG tile, no animation, no JS. */
+.rb-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.07;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-shiny, .rb-gradient, .rb-blur-in { animation: none; }
+}
+
+/* Sliding language pills */
+.rb-pills {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid rgb(255 255 255 / 0.1);
+  max-width: 100%;
+  isolation: isolate;
+}
+
+.rb-pills-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 6px 18px -6px rgb(196 181 253 / 0.7);
+  opacity: 0;
+  transition: transform 0.45s cubic-bezier(0.34, 1.4, 0.64, 1), width 0.45s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.2s ease;
+  will-change: transform, width;
+}
+
+.rb-pills-option {
+  flex: none;
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(203 213 225);
+  transition: color 0.3s ease;
+}
+
+.rb-pills-option[aria-pressed='true'] { color: #020617; }
+
+@media (hover: hover) and (pointer: fine) {
+  .rb-pills-option[aria-pressed='false']:hover { color: #fff; }
+}
+
+.rb-pills-option:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  .rb-pills-option { min-height: 2.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-pills-indicator { transition: opacity 0.2s ease; }
+}
+
+/* Elastic volume wedge (React Bits ElasticSlider feel) */
+.volume-wedge {
+  transition: transform 0.55s cubic-bezier(0.34, 1.8, 0.5, 1);
+  touch-action: pan-y;
+}
+
+.volume-wedge::before { transition: filter 0.2s ease; }
+.volume-wedge.is-dragging::before { filter: brightness(1.2) drop-shadow(0 0 8px var(--vol-a)); }
+
+.volume-mute,
+.volume-max {
+  transition: transform 0.55s cubic-bezier(0.34, 1.8, 0.5, 1), background 0.2s ease, color 0.2s ease;
+}
+
+.volume-wedge.is-dragging .volume-slider::-webkit-slider-thumb { transform: scaleY(1.18); }
+
+@media (pointer: coarse) {
+  .volume-wedge { height: 2.5rem; }
+  .volume-wedge .volume-slider::-webkit-slider-thumb { width: 10px; }
+  .volume-mute,
+  .volume-max { width: 2.75rem; height: 2.75rem; }
+}
+
+/* Touch tablets can't hover, so the compact slider would never open: keep it visible. */
+@media (hover: none) {
+  .volume-compact .volume-compact-track {
+    width: 6.5rem;
+    opacity: 1;
+    padding: 0 0.75rem 0 0.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .volume-wedge,
+  .volume-mute,
+  .volume-max { transition: none; }
 }

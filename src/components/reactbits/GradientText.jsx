@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-
+// The flow is a CSS animation (see .rb-gradient in App.css): the colour list is doubled and the
+// background is twice as wide, so shifting it by one width loops seamlessly.
 export default function GradientText({
   children,
   colors = ['#c4b5fd', '#f472b6', '#fb923c', '#c4b5fd'],
@@ -9,41 +9,16 @@ export default function GradientText({
   className = '',
   style
 }) {
-  const rootRef = useRef(null);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    if (reduced) return;
-
-    let raf = 0;
-    let start = performance.now();
-    const duration = animationSpeed * 1000;
-
-    const tick = (now) => {
-      const elapsed = (now - start) % duration;
-      const progress = (elapsed / duration) * 200; // 0% to 200%
-      root.style.backgroundPosition = `${progress.toFixed(1)}% 50%`;
-      raf = requestAnimationFrame(tick);
-    };
-
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [animationSpeed]);
-
   const gradientStops = [...colors, ...colors].join(', ');
 
   return (
     <span
-      ref={rootRef}
-      className={`inline-block bg-clip-text text-transparent transition-all will-change-[background-position] ${className}`}
+      className={`rb-gradient inline-block bg-clip-text text-transparent ${className}`}
       style={{
         backgroundImage: `linear-gradient(${angle}deg, ${gradientStops})`,
-        backgroundSize: '200% 200%',
         WebkitBackgroundClip: 'text',
         WebkitTextFillColor: 'transparent',
+        '--rb-gradient-duration': `${animationSpeed}s`,
         filter: glow > 0 ? `drop-shadow(0 0 ${glow * 12}px rgba(196,181,253,0.35))` : undefined,
         ...style
       }}

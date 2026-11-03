@@ -1,18 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useFinePointer } from './motion.js';
 
 export default function TargetCursor({
   targetSelector = 'button, a, input, [role="button"], [data-cursor-target], .cursor-target',
   hideNativeCursor = false,
-  color = '#a78bfa',
   className = '',
   style = {}
 }) {
   const cursorRef = useRef(null);
-  const [hasPointer] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-  });
+  // Touch screens and reduced-motion users keep the native cursor only.
+  const hasPointer = useFinePointer();
   const [isHovered, setIsHovered] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
@@ -42,13 +40,10 @@ export default function TargetCursor({
     let currentWidth = 28;
     let currentHeight = 28;
     let isLocked = false;
+    let animationFrameId = 0;
 
-    const onMouseMove = (e) => {
-      mouseX = e.clientX;
-      mouseY = e.clientY;
-      setIsVisible(true);
-
-      const target = e.target?.closest ? e.target.closest(targetSelector) : null;
+    const lockOnto = (eventTarget) => {
+      const target = eventTarget?.closest ? eventTarget.closest(targetSelector) : null;
       if (target && !target.disabled) {
         const rect = target.getBoundingClientRect();
         targetX = rect.left + rect.width / 2;
@@ -65,14 +60,32 @@ export default function TargetCursor({
         isLocked = false;
         setIsHovered(false);
       }
+      wake();
+    };
+
+    const onMouseMove = (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+      setIsVisible(true);
+      lockOnto(e.target);
+    };
+
+    // The page moves under a parked cursor while scrolling; re-measure whatever is beneath it now.
+    const onScroll = () => {
+      if (mouseX < 0) return;
+      lockOnto(document.elementFromPoint(mouseX, mouseY));
     };
 
     const onMouseLeave = () => {
       setIsVisible(false);
     };
 
-    let animationFrameId;
-    const animate = () => {
+    function wake() {
+      if (!animationFrameId) animationFrameId = requestAnimationFrame(animate);
+    }
+
+    // Runs only while the reticle is catching up, then idles until the next move.
+    function animate() {
       const ease = isLocked ? 0.28 : 0.45;
       if (currentX === -100) {
         currentX = targetX;
@@ -93,19 +106,26 @@ export default function TargetCursor({
         cursorRef.current.style.width = `${Math.round(currentWidth)}px`;
         cursorRef.current.style.height = `${Math.round(currentHeight)}px`;
       }
-      animationFrameId = requestAnimationFrame(animate);
-    };
+
+      const settled =
+        Math.abs(targetX - currentX) < 0.1 &&
+        Math.abs(targetY - currentY) < 0.1 &&
+        Math.abs(targetWidth - currentWidth) < 0.1 &&
+        Math.abs(targetHeight - currentHeight) < 0.1;
+      animationFrameId = settled ? 0 : requestAnimationFrame(animate);
+    }
 
     window.addEventListener('mousemove', onMouseMove, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     document.documentElement.addEventListener('mouseleave', onMouseLeave);
-    animationFrameId = requestAnimationFrame(animate);
 
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('scroll', onScroll, { capture: true });
       document.documentElement.removeEventListener('mouseleave', onMouseLeave);
       cancelAnimationFrame(animationFrameId);
     };
-  }, [hasPointer, targetSelector, color]);
+  }, [hasPointer, targetSelector]);
 
   if (!hasPointer || typeof document === 'undefined') return null;
 

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-
+// The sweep is a CSS animation (see .rb-shiny in App.css), so it costs no JS per frame
+// and stops automatically under prefers-reduced-motion.
 export default function ShinyText({
   text,
   children,
@@ -14,47 +14,16 @@ export default function ShinyText({
   style
 }) {
   const content = children ?? text;
-  const rootRef = useRef(null);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    if (reduced) return;
-
-    let raf = 0;
-    let start = performance.now();
-    const duration = speed * 1000;
-    const pauseMs = delay * 1000;
-
-    const tick = (now) => {
-      const elapsed = (now - start) % (duration + pauseMs);
-      let p = elapsed / duration;
-      if (p > 1) p = 1;
-
-      // Position from -shineWidth to 100 + shineWidth
-      const pos = -shineWidth + p * (100 + shineWidth * 2);
-      root.style.backgroundImage = `linear-gradient(${angle}deg, ${color} 0%, ${color} ${Math.max(
-        0,
-        pos - shineWidth / 2
-      )}%, ${shineColor} ${pos}%, ${color} ${Math.min(100, pos + shineWidth / 2)}%, ${color} 100%)`;
-
-      raf = requestAnimationFrame(tick);
-    };
-
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [color, shineColor, speed, delay, angle, shineWidth]);
+  const half = Math.min(50, Math.max(5, shineWidth / 2));
 
   return (
     <span
-      ref={rootRef}
-      className={`relative inline-block bg-clip-text text-transparent transition-all ${className}`}
+      className={`rb-shiny relative inline-block bg-clip-text text-transparent ${className}`}
       style={{
-        backgroundImage: `linear-gradient(${angle}deg, ${color} 0%, ${shineColor} 50%, ${color} 100%)`,
+        backgroundImage: `linear-gradient(${angle}deg, ${color} 0%, ${color} ${50 - half}%, ${shineColor} 50%, ${color} ${50 + half}%, ${color} 100%)`,
         WebkitBackgroundClip: 'text',
         WebkitTextFillColor: 'transparent',
+        '--rb-shiny-duration': `${speed + delay}s`,
         filter: glow > 0 ? `drop-shadow(0 0 ${glow * 8}px ${shineColor}40)` : undefined,
         ...style
       }}

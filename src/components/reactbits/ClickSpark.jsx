@@ -222,7 +222,9 @@ const ClickSpark = forwardRef(function ClickSpark(
     const frame = (now) => {
       raf = 0;
       for (const burst of [...bursts]) {
-        const elapsed = now - burst.start;
+        // rAF's timestamp can predate the performance.now() taken at spawn; a negative
+        // elapsed would push the eased radius below zero and make ctx.arc throw.
+        const elapsed = Math.max(0, now - burst.start);
         const ctx = burst.ctx;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, burst.canvas.width, burst.canvas.height);
@@ -316,12 +318,23 @@ const ClickSpark = forwardRef(function ClickSpark(
       if (!raf) raf = requestAnimationFrame(frame);
     };
 
+    // Mouse sparks on press for instant feedback. Touch and pen wait for the click, which the
+    // browser only fires for a real tap, so starting a scroll or swipe never sparks.
+    let lastPointerType = 'mouse';
     const onPointerDown = (event) => {
-      if (event.button !== 0 && event.pointerType === 'mouse') return;
+      lastPointerType = event.pointerType;
+      if (event.pointerType !== 'mouse' || event.button !== 0) return;
+      spawn(event.clientX, event.clientY);
+    };
+
+    const onClick = (event) => {
+      // detail is 0 for keyboard-activated clicks, which have no real coordinates.
+      if (lastPointerType === 'mouse' || event.detail === 0) return;
       spawn(event.clientX, event.clientY);
     };
 
     root.addEventListener('pointerdown', onPointerDown);
+    root.addEventListener('click', onClick);
 
     engineRef.current = {
       spark: (x, y) => {
@@ -333,6 +346,7 @@ const ClickSpark = forwardRef(function ClickSpark(
     return () => {
       cancelAnimationFrame(raf);
       root.removeEventListener('pointerdown', onPointerDown);
+      root.removeEventListener('click', onClick);
       for (const burst of [...bursts]) remove(burst);
       engineRef.current = null;
     };
