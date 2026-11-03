@@ -145,11 +145,29 @@ The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Fire
   `[` / `]` change volume by 5%. iOS Safari ignores in-page volume, so there the
   slider is hidden and you use the device buttons; mute still works.
 
-Run the discovery helper tests with `node --test src/musicDiscovery.test.js`
-(or prefix with `npm exec --yes --package=node@22 --` on older Node).
-Run open-music tests with `node --test src/openMusic.test.js`.
-Run history tests with `node --test src/searchHistory.test.js` and volume tests
-with `node --test src/volume.test.js`.
+## Tests
+
+Run these after every change to confirm the app still works:
+
+| Command | What it checks |
+| --- | --- |
+| `npm test` | All unit tests (`src/**/*.test.js`, Node's built-in runner). Fast; no browser. |
+| `npm run test:e2e` | Browser tests in `e2e/` with Playwright. Starts the app and drives it like a user on a desktop (1280×800) and a phone (Pixel 7) screen. |
+| `npm run check` | Everything before a push: lint, unit tests, production build, browser tests. |
+
+The browser tests cover the welcome screen, picking a mood, the language bar,
+playback and lock-screen controls, the volume card, search, the mouse-only
+effects (custom cursor, tilt) and reduced motion. JioSaavn, Audius and iTunes
+are replaced by a fake catalogue in `e2e/fakeMusic.js`, so results don't depend
+on those services being up. One-time setup for the browser:
+
+```bash
+npx playwright install chromium
+```
+
+After a failure, `npx playwright show-report` opens screenshots and a
+step-by-step trace. Run one file's unit tests with, for example,
+`node --test src/volume.test.js`.
 
 ## Run locally
 
