@@ -99,6 +99,64 @@ test('search finds a song by name', async ({ page }) => {
   await expect(page.getByText('Moonlight 1').first()).toBeVisible();
 });
 
+test('search playback stays accessible and song progress can be dragged', async ({ page }, testInfo) => {
+  await page.unrouteAll();
+  await useFakeMusic(page, { audioSeconds: 30 });
+  await page.getByRole('button', { name: 'Search songs or artists from anywhere' }).click();
+  const search = page.getByRole('dialog');
+  await search.getByPlaceholder('What do you want to hear?').fill('Moonlight');
+  await search.getByRole('button', { name: 'Play Moonlight 1 by English Test Artist' }).click();
+  await expect.poll(() => page.evaluate(() => document.querySelector('audio').duration)).toBe(30);
+
+  if (isMobile(testInfo)) {
+    await expect(search.getByRole('region', { name: 'Now playing in search' })).toHaveCount(0);
+    await expect(search.getByRole('group', { name: 'Preview progress for Moonlight 1' })).toHaveCount(0);
+    await search.getByRole('button', { name: 'Pause Moonlight 1 by English Test Artist' }).click();
+  } else {
+    const nowPlaying = search.getByRole('region', { name: 'Now playing in search' });
+    const preview = search.getByRole('group', { name: 'Preview progress for Moonlight 1' });
+    await expect(nowPlaying).toContainText('Moonlight 1');
+    await nowPlaying.getByRole('button', { name: 'Pause current song' }).click();
+    await expect.poll(() => page.evaluate(() => document.querySelector('audio').paused)).toBe(true);
+
+    const slider = preview.getByRole('slider', { name: 'Seek song' });
+    await expect(slider).toBeEnabled();
+    const box = await slider.boundingBox();
+    await page.mouse.move(box.x + 7, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(() => page.evaluate(() => document.querySelector('audio').currentTime)).toBeGreaterThan(12);
+    await expect(nowPlaying.getByRole('slider', { name: 'Seek song' })).toHaveValue(await slider.inputValue());
+    await expect(search).toBeVisible();
+    await search.getByPlaceholder('What do you want to hear?').fill('Another song');
+    await expect(nowPlaying).toContainText('Moonlight 1');
+    await nowPlaying.getByRole('button', { name: 'Play current song' }).click();
+    await expect.poll(() => page.evaluate(() => document.querySelector('audio').paused)).toBe(false);
+    await nowPlaying.getByRole('button', { name: 'Pause current song' }).click();
+  }
+
+  await search.getByRole('button', { name: 'Close search' }).click();
+  if (!isMobile(testInfo)) await page.getByTitle('Play', { exact: true }).click();
+  await page.getByRole('button', { name: 'Search songs or artists from anywhere' }).click();
+  if (!isMobile(testInfo)) {
+    const nowPlaying = search.getByRole('region', { name: 'Now playing in search' });
+    await expect(nowPlaying).toContainText('Moonlight 1');
+    await nowPlaying.getByRole('button', { name: 'Pause current song' }).click();
+  }
+  await search.getByRole('button', { name: 'Close search' }).click();
+  const miniSlider = page.getByRole('slider', { name: 'Seek song' });
+  await expect(miniSlider).toBeEnabled();
+  await miniSlider.focus();
+  await page.keyboard.press('Home');
+  await expect.poll(() => page.evaluate(() => document.querySelector('audio').currentTime)).toBeLessThan(2);
+  await page.locator('.flex-1.min-w-0.cursor-pointer.group').click();
+  const fullSlider = page.getByRole('slider', { name: 'Seek song' }).last();
+  await fullSlider.focus();
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => document.querySelector('audio').currentTime)).toBeGreaterThanOrEqual(5);
+});
+
 test('pointer-only effects are on for a mouse and off for touch', async ({ page }, testInfo) => {
   const cursor = page.locator('[class*="z-[99999]"]');
   if (isMobile(testInfo)) {

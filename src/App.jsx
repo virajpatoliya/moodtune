@@ -621,8 +621,37 @@ function useMediaQuery(query) {
   );
 }
 
+function SeekSlider({ progress, duration, enabled, onSeek, accent }) {
+  const max = Math.max(1, duration);
+  const value = Math.min(max, Math.max(0, progress));
+  return (
+    <input
+      type="range"
+      className="seek-slider"
+      aria-label="Seek song"
+      aria-valuetext={`${formatDuration(value)} of ${formatDuration(duration)}`}
+      min="0"
+      max={max}
+      step="1"
+      value={value}
+      disabled={!enabled}
+      onChange={(event) => onSeek(Number(event.target.value))}
+      onClick={(event) => event.stopPropagation()}
+      style={{ '--seek-fill': `${(value / max) * 100}%`, '--seek-a': accent[0], '--seek-b': accent[1] }}
+    />
+  );
+}
+
+function formatDuration(secs) {
+  if (!Number.isFinite(secs)) return '0:00';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
 export default function App() {
   const isMobile = useMediaQuery('(max-width: 639px)');
+  const isDesktopSearch = useMediaQuery('(min-width: 768px)');
   const [screen, setScreen] = useState('welcome');
   const [quizStep, setQuizStep] = useState(0);
 
@@ -665,6 +694,7 @@ export default function App() {
   const [isPlayerVisible, setIsPlayerVisible] = useState(true);
   const [progressSec, setProgressSec] = useState(0);
   const [trackDuration, setTrackDuration] = useState(30);
+  const [canSeek, setCanSeek] = useState(false);
   const [volumeState, setVolumeState] = useState(() => readVolume());
   const [volumeSupported] = useState(() => typeof Audio === 'undefined' || canSetVolume());
   const isMuted = volumeState.muted || volumeState.level === 0;
@@ -1253,14 +1283,12 @@ export default function App() {
     }
   };
 
-  const handleSeek = (e) => {
-    const trackRect = e.currentTarget.getBoundingClientRect();
-    const clickRatio = Math.max(0, Math.min(1, (e.clientX - trackRect.left) / trackRect.width));
-    const newSeconds = Math.floor(clickRatio * trackDuration);
-    setProgressSec(newSeconds);
-    if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
-      seekMedia(newSeconds);
-    }
+  const handleSeek = (seconds) => {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    const target = Math.max(0, Math.min(seconds, audio.duration));
+    seekMedia(target);
+    setProgressSec(target);
   };
 
   const handleStopAndClosePlayer = (e) => {
@@ -1451,13 +1479,6 @@ export default function App() {
     }
   }, [screen, quizStep, isSearchOpen, isFullPlayerOpen, isMoodModalOpen]);
 
-  const formatDuration = (secs) => {
-    if (isNaN(secs)) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
   const greetingTime = useMemo(() => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -1521,7 +1542,8 @@ export default function App() {
       <audio
         ref={audioRef}
         preload="metadata"
-        onError={(e) => handlePlaybackError(e.currentTarget.error)}
+        onLoadStart={() => setCanSeek(false)}
+        onError={(e) => { setCanSeek(false); handlePlaybackError(e.currentTarget.error); }}
         onTimeUpdate={(e) => {
           const cur = Math.floor(e.currentTarget.currentTime || 0);
           setProgressSec(cur);
@@ -1530,6 +1552,7 @@ export default function App() {
           const dur = Math.floor(e.currentTarget.duration || 0);
           if (dur > 0 && Number.isFinite(dur)) {
             setTrackDuration(dur);
+            setCanSeek(true);
           }
         }}
         onEnded={() => {
@@ -1662,6 +1685,32 @@ export default function App() {
               </button>
             </div>
 
+            {isDesktopSearch && activeSong && currentSong && isPlayerVisible && (
+              <section aria-label="Now playing in search" className="search-now-playing">
+                <div className="flex items-center gap-3">
+                  <SongCoverArt song={currentSong} realCoverUrl={currentSong.realCoverUrl} size="xs" isPlaying={isPlaying} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Now playing</p>
+                    <p className="truncate text-sm font-semibold text-white">{currentSong.title}</p>
+                    <p className="truncate text-xs text-slate-400">{currentSong.artist}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleTogglePlay}
+                    aria-label={isPlaying ? 'Pause current song' : 'Play current song'}
+                    className="search-now-playing-toggle"
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                  <span>{formatDuration(progressSec)}</span>
+                  <SeekSlider progress={progressSec} duration={trackDuration} enabled={canSeek} onSeek={handleSeek} accent={volumeAccent} />
+                  <span>{formatDuration(trackDuration)}</span>
+                </div>
+              </section>
+            )}
+
             <div
               className="search-scroll-area space-y-4"
               onTouchMove={() => { if (document.activeElement === searchInputRef.current) searchInputRef.current?.blur(); }}
@@ -1719,7 +1768,7 @@ export default function App() {
                   <div
                     key={song.id}
                     onClick={() => handleSelectSong(song, true, { openPlayer: true, toggle: false })}
-                    className={`search-result flex items-center rounded-2xl border transition ${currentSong?.id === song.id ? 'bg-violet-500/20 border-violet-400/40' : 'bg-white/[0.03] border-white/5 hover:border-violet-400/30'}`}
+                    className={`search-result flex flex-wrap items-center rounded-2xl border transition ${currentSong?.id === song.id ? 'bg-violet-500/20 border-violet-400/40' : 'bg-white/[0.03] border-white/5 hover:border-violet-400/30'}`}
                   >
                     <button
                       aria-label={`${currentSong?.id === song.id && isPlaying ? 'Pause' : 'Play'} ${song.title} by ${song.artist}`}
@@ -1748,6 +1797,13 @@ export default function App() {
                       </div>
                       <ChevronRight className="w-4 h-4 shrink-0 text-slate-400 ml-auto" />
                     </button>
+                    {isDesktopSearch && activeSong?.id === song.id && isPlayerVisible && (
+                      <div role="group" aria-label={`Preview progress for ${song.title}`} className="search-preview-progress" onClick={(event) => event.stopPropagation()}>
+                        <span>{formatDuration(progressSec)}</span>
+                        <SeekSlider progress={progressSec} duration={trackDuration} enabled={canSeek} onSeek={handleSeek} accent={volumeAccent} />
+                        <span>{formatDuration(trackDuration)}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
                   </div>
@@ -2431,18 +2487,7 @@ export default function App() {
               <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
                 {formatDuration(progressSec)}
               </span>
-              <div
-                onClick={handleSeek}
-                className="flex-1 h-2 bg-white/10 hover:h-2.5 rounded-full overflow-hidden cursor-pointer relative transition-all"
-                title="Click to seek"
-              >
-                <div
-                  className={`h-full bg-gradient-to-r ${moodProfile.cardGradient} transition-all duration-150`}
-                  style={{
-                    width: `${Math.min(100, (progressSec / trackDuration) * 100)}%`
-                  }}
-                />
-              </div>
+              <SeekSlider progress={progressSec} duration={trackDuration} enabled={canSeek} onSeek={handleSeek} accent={volumeAccent} />
               <span className="text-[10px] font-mono text-slate-400 w-7">
                 {formatDuration(trackDuration)}
               </span>
@@ -2634,17 +2679,7 @@ export default function App() {
                 </div>
 
                 <div className="w-full max-w-sm space-y-1.5 mb-5">
-                  <div
-                    onClick={handleSeek}
-                    className="w-full h-2 bg-white/15 rounded-full overflow-hidden cursor-pointer"
-                  >
-                    <div
-                      className={`h-full bg-gradient-to-r ${moodProfile.cardGradient}`}
-                      style={{
-                        width: `${Math.min(100, (progressSec / trackDuration) * 100)}%`
-                      }}
-                    />
-                  </div>
+                  <SeekSlider progress={progressSec} duration={trackDuration} enabled={canSeek} onSeek={handleSeek} accent={volumeAccent} />
                   <div className="flex justify-between text-xs text-slate-400 font-mono">
                     <span>{formatDuration(progressSec)}</span>
                     <span>{formatDuration(trackDuration)}</span>

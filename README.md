@@ -121,6 +121,9 @@ The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Fire
 - Each result has a separate left Play/Pause button that plays the full song without
   leaving search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.
+  At widths of 768px and above, search also shows the current song's playback controls
+  and a seek bar beneath its result. The mini and full players support dragging or
+  using the keyboard to seek once track metadata has loaded.
 - Selecting a song from any surface starts song radio that aims for 15–20
   upcoming full songs, filled in priority order: closest matches to the playing
   song first, then other songs by its artists, then songs in its genre, then the
