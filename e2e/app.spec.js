@@ -99,6 +99,34 @@ test('search finds a song by name', async ({ page }) => {
   await expect(page.getByText('Moonlight 1').first()).toBeVisible();
 });
 
+test('JioSaavn rate limits are shown while Audius provides a fallback', async ({ page }) => {
+  let saavnRequests = 0;
+  await page.route('https://saavn.sumit.co/api/**', (route) => {
+    saavnRequests += 1;
+    return route.fulfill({ status: 429, headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'retry-after', 'retry-after': '60' } });
+  });
+  await page.route('https://api.audius.co/v1/tracks/search**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { 'access-control-allow-origin': '*' },
+    body: JSON.stringify({ data: [{ id: 'fallback', title: 'Independent song', duration: 180, user: { id: 'artist', name: 'Independent artist' } }] }),
+  }));
+  await openMood(page);
+  const warning = page.getByRole('alert').filter({ hasText: 'HTTP 429' });
+  await expect(warning).toContainText('Showing independent songs from Audius instead.');
+  await expect(page.getByText('Independent song').first()).toBeVisible();
+  const initialRequests = saavnRequests;
+  expect(initialRequests).toBeLessThanOrEqual(4);
+  await warning.getByRole('button', { name: 'Retry for more picks' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'HTTP 429' })).toBeVisible();
+  expect(saavnRequests).toBe(initialRequests);
+  await page.getByRole('button', { name: 'Search songs or artists from anywhere' }).click();
+  await page.getByPlaceholder('What do you want to hear?').fill('Independent');
+  await expect(page.getByRole('dialog').getByText(/HTTP 429/)).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('Independent song').first()).toBeVisible();
+  expect(saavnRequests).toBe(initialRequests);
+});
+
 test('search playback stays accessible and song progress can be dragged', async ({ page }, testInfo) => {
   await page.unrouteAll();
   await useFakeMusic(page, { audioSeconds: 30 });

@@ -816,15 +816,17 @@ export default function App() {
       try {
         const seenTitles = moodSeenRef.current.get(preferenceKey) || [];
         let songs;
+        let warning = '';
         try {
           songs = await fetchSaavnMoodMix({ mood: currentMood, intent: currentIntent, language: discoveryLanguage }, discoveryRevision, controller.signal);
         } catch (error) {
           if (controller.signal.aborted) throw error;
           console.error('JioSaavn mood mix failed; using open music.', error);
           songs = await fetchOpenMoodMix({ mood: currentMood, intent: currentIntent }, discoveryRevision, controller.signal);
+          warning = `${error.message} ${songs.length ? 'Showing independent songs from Audius instead.' : 'No Audius songs were found either.'}`;
         }
         if (cancelled) return;
-        setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error: '' });
+        setDiscovery({ key: discoveryKey, songs, seenTitles, status: 'ready', error: warning });
       } catch (error) {
         if (cancelled) return;
         console.error('Live discovery failed.', error);

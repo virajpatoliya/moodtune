@@ -4,6 +4,7 @@ import {
   buildSaavnRadio,
   clearSaavnCache,
   decodeEntities,
+  fetchSaavn,
   fetchSaavnMoodMix,
   fetchSaavnRadio,
   fetchSaavnSuggestions,
@@ -79,6 +80,16 @@ test('ranks the popular original above covers and karaoke', () => {
   assert.equal(rankSearchResults('tum hi ho karaoke', songs)[0].saavnId, 'k');
 });
 
+test('ranks complete song and artist matches above more popular partial matches', () => {
+  const songs = normalizeSaavnSongs([
+    raw('popular', 'Tum Hi Ho', 'Other Singer', { playCount: 900000000 }),
+    raw('match', 'Tum Hi Ho', 'Arijit Singh', { playCount: 100 }),
+    raw('unrelated', 'Another Song', 'Arijit Singh', { playCount: 900000000 }),
+  ]);
+  assert.equal(rankSearchResults('tum hi ho arijit singh', songs)[0].saavnId, 'match');
+  assert.equal(rankSearchResults('tum hi ho arij', songs)[0].saavnId, 'match');
+});
+
 test('artist searches lead with that artist\'s popular songs', async () => {
   const { fetcher } = fakeFetcher([
     [(path) => path === '/search/songs', () => ({ results: [raw('s1', 'Arijit Mashup', 'DJ Someone')] })],
@@ -89,6 +100,20 @@ test('artist searches lead with that artist\'s popular songs', async () => {
   assert.deepEqual(songs.map((song) => song.saavnId), ['p1', 'p2', 's1']);
 });
 
+test('song and artist searches do not replace matching songs with unrelated artist hits', async () => {
+  const { fetcher, calls } = fakeFetcher([
+    [(path) => path === '/search/songs', () => ({ results: [
+      raw('partial', 'Other Song', 'Arijit Singh', { playCount: 900000000 }),
+      raw('match', 'Tum Hi Ho', 'Arijit Singh', { playCount: 100 }),
+    ] })],
+    [(path) => path === '/search/artists', () => ({ results: [{ id: '459320', name: 'Arijit Singh' }] })],
+    [(path) => path === '/artists/459320/songs', () => ({ songs: [raw('hit', 'Unrelated Hit', 'Arijit Singh')] })],
+  ]);
+  const songs = await searchSaavn('tum hi ho arijit singh', undefined, {}, { fetcher });
+  assert.equal(songs[0].saavnId, 'match');
+  assert.ok(!calls.some((url) => url.includes('/artists/459320/songs')));
+});
+
 test('search still works when the artist lookup fails, and errors when everything fails', async () => {
   const partial = fakeFetcher([[(path) => path === '/search/songs', () => ({ results: [raw('s1', 'Kesariya', 'Pritam')] })]]);
   assert.deepEqual((await searchSaavn('kesariya', undefined, {}, { fetcher: partial.fetcher })).map((song) => song.saavnId), ['s1']);
@@ -97,12 +122,83 @@ test('search still works when the artist lookup fails, and errors when everythin
   await assert.rejects(searchSaavn('kesariya', undefined, {}, down), /busy right now/);
 });
 
+test('rate limiting respects Retry-After, avoids further requests and keeps cached results', async (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const fetcher = async (url) => {
+    calls += 1;
+    if (url.includes('limited') && calls === 2) {
+      return { ok: false, status: 429, headers: new Headers({ 'retry-after': '2' }) };
+    }
+    return { ok: true, json: async () => ({ success: true, data: { results: [] } }) };
+  };
+  await fetchSaavn('/cached', {}, undefined, { fetcher });
+  await assert.rejects(fetchSaavn('/limited', {}, undefined, { fetcher }), /HTTP 429.*2 seconds/);
+  await assert.rejects(fetchSaavn('/another', {}, undefined, { fetcher }), /HTTP 429/);
+  await fetchSaavn('/cached', {}, undefined, { fetcher });
+  assert.equal(calls, 2);
+  now += 2000;
+  await fetchSaavn('/another', {}, undefined, { fetcher });
+  assert.equal(calls, 3);
+});
+
+test('rate limiting without Retry-After backs off and stops mood-query retries', async () => {
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    return { ok: false, status: 429 };
+  };
+  await assert.rejects(fetchSaavnMoodMix({ mood: 'happy', language: 'All' }, 0, undefined, { fetcher }), /HTTP 429.*60 seconds/);
+  assert.ok(calls <= 4, `made ${calls} requests`);
+});
+
+test('network failures also back off when a browser cannot expose the HTTP response', async (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    throw new TypeError('Failed to fetch');
+  };
+  await assert.rejects(fetchSaavn('/songs', {}, undefined, { fetcher }), /could not be reached.*60 seconds/);
+  await assert.rejects(fetchSaavn('/playlists', {}, undefined, { fetcher }), /could not be reached/);
+  assert.equal(calls, 1);
+  now += 60_000;
+  await assert.rejects(fetchSaavn('/songs', {}, undefined, { fetcher }), /could not be reached/);
+  assert.equal(calls, 2);
+});
+
+test('search reports a failed song lookup instead of an empty successful result', async () => {
+  const fetcher = async (url) => url.includes('/search/songs')
+    ? { ok: false, status: 429 }
+    : { ok: true, json: async () => ({ success: true, data: { results: [] } }) };
+  await assert.rejects(searchSaavn('song', undefined, {}, { fetcher }), /HTTP 429/);
+});
+
 test('builds ordered mood playlist queries per language', () => {
   assert.deepEqual(moodPlaylistQueries({ mood: 'romantic', intent: 'match', language: 'Hindi' }), [['hindi romantic', 'hindi love', 'hindi hits']]);
   assert.deepEqual(moodPlaylistQueries({ mood: 'sad', intent: 'uplift', language: 'Punjabi' })[0].slice(0, 2), ['punjabi happy', 'punjabi party']);
   assert.equal(moodPlaylistQueries({ mood: 'calm', language: 'Instrumental' })[0][0], 'instrumental chill');
   assert.equal(moodPlaylistQueries({ mood: 'happy', language: 'Surprise' }).length, 2);
   assert.deepEqual(moodPlaylistQueries({ mood: 'romantic', language: 'All' }).map((queries) => queries[0]), ['hindi romantic', 'english romantic', 'punjabi romantic', 'gujarati romantic']);
+});
+
+test('mood mix stops searching alternative playlists once each language has songs', async () => {
+  const { fetcher, calls } = fakeFetcher([
+    [(path) => path === '/search/playlists', (params) => {
+      const language = params.get('query').split(' ')[0];
+      return { results: [{ id: language, name: `${language} mix`, language, url: `https://jiosaavn.com/featured/${language}` }] };
+    }],
+    [(path) => path === '/playlists', (params) => {
+      const language = params.get('link').split('/').pop();
+      return { songs: Array.from({ length: 8 }, (_, i) => raw(`${language}${i}`, `${language} ${i}`, `Artist ${i}`, { language })) };
+    }],
+  ]);
+  const mix = await fetchSaavnMoodMix({ mood: 'happy', language: 'All' }, 0, undefined, { fetcher });
+  assert.equal(mix.length, 12);
+  assert.equal(calls.filter((url) => url.includes('/search/playlists')).length, 4);
+  assert.equal(calls.filter((url) => new URL(url).pathname === '/api/playlists').length, 4);
 });
 
 test('mood mix skips empty and other-language playlists and falls back to other words', async () => {

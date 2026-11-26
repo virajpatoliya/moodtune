@@ -10,6 +10,7 @@ const MIN_SECONDS = 45;
 const MAX_SECONDS = 15 * 60;
 const CACHE_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 9000;
+const DEFAULT_RATE_LIMIT_MS = 60 * 1000;
 const BUSY_MESSAGE = 'Song search is busy right now. Please try again in a moment.';
 
 // JioSaavn playlist search is keyword-based and coverage differs per language
@@ -114,12 +115,36 @@ export function normalizeSaavnSongs(items, { mood, intent, reason } = {}) {
 }
 
 const cache = new Map();
+let rateLimitedUntil = 0;
+let unreachableUntil = 0;
+
+function rateLimitError() {
+  const seconds = Math.max(1, Math.ceil((rateLimitedUntil - Date.now()) / 1000));
+  const error = new Error(`JioSaavn is limiting requests (HTTP 429). Try again in about ${seconds} seconds; the service may need longer.`);
+  error.status = 429;
+  return error;
+}
+
+function retryDelay(response) {
+  const value = response.headers?.get?.('retry-after')?.trim();
+  if (!value) return DEFAULT_RATE_LIMIT_MS;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : DEFAULT_RATE_LIMIT_MS;
+}
+
+function unreachableError(cause) {
+  const seconds = Math.max(1, Math.ceil((unreachableUntil - Date.now()) / 1000));
+  return new Error(`${BUSY_MESSAGE} JioSaavn could not be reached; try again in about ${seconds} seconds.`, cause ? { cause } : undefined);
+}
 
 export async function fetchSaavn(path, params = {}, signal, { fetcher = fetch } = {}) {
   signal?.throwIfAborted();
   const url = `${SAAVN_API}${path}?${new URLSearchParams(params)}`;
   const cached = cache.get(url);
   if (cached && cached.expires > Date.now()) return cached.data;
+  if (Date.now() < rateLimitedUntil) throw rateLimitError();
+  if (Date.now() < unreachableUntil) throw unreachableError();
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const scoped = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response;
@@ -127,9 +152,18 @@ export async function fetchSaavn(path, params = {}, signal, { fetcher = fetch } 
     response = await fetcher(url, { signal: scoped });
   } catch (error) {
     if (signal?.aborted) throw signal.reason ?? error;
+    if (error instanceof TypeError || error?.name === 'TimeoutError') {
+      unreachableUntil = Math.max(unreachableUntil, Date.now() + DEFAULT_RATE_LIMIT_MS);
+      throw unreachableError(error);
+    }
     throw new Error(BUSY_MESSAGE, { cause: error });
   }
+  if (response.status === 429) {
+    rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + retryDelay(response));
+    throw rateLimitError();
+  }
   if (!response.ok) throw new Error(`${BUSY_MESSAGE} (HTTP ${response.status})`);
+  unreachableUntil = 0;
   const body = await response.json();
   if (!body?.success || !body.data) throw new Error(BUSY_MESSAGE);
   if (cache.size >= 150) cache.delete(cache.keys().next().value);
@@ -139,6 +173,8 @@ export async function fetchSaavn(path, params = {}, signal, { fetcher = fetch } 
 
 export function clearSaavnCache() {
   cache.clear();
+  rateLimitedUntil = 0;
+  unreachableUntil = 0;
 }
 
 const dedupe = (songs) => {
@@ -153,25 +189,45 @@ const dedupe = (songs) => {
   });
 };
 
-// Ranks by how much of the query appears in the title/artist, then popularity.
-// Covers, karaoke and remixes sink unless the search asks for them.
+// Prefer query matches over popularity, including a partial final word while typing.
 export function rankSearchResults(term, songs, { artistSongIds = new Set() } = {}) {
   const query = tokens(term);
   const wantsVariant = VARIANT_PATTERN.test(term);
   return songs.map((song, index) => {
-    const words = new Set([...tokens(song.title), ...tokens(song.artist), ...tokens(song.album)]);
-    const coverage = query.length ? query.filter((word) => words.has(word)).length / query.length : 0;
-    let score = coverage * 20 + Math.log10(song.playCount + 1) * 0.8;
-    if (artistSongIds.has(song.id)) score += 6 - Math.min(index, 20) * 0.05;
-    if (!wantsVariant && VARIANT_PATTERN.test(song.title)) score -= 6;
-    return { song, score };
-  }).sort((a, b) => b.score - a.score).map((entry) => entry.song);
+    const title = tokens(song.title);
+    const words = new Set([...title, ...tokens(song.artist), ...tokens(song.album)]);
+    const matches = (word, position, candidates) => candidates.has(word)
+      ? 1
+      : position === query.length - 1 && word.length >= 2 && [...candidates].some((candidate) => candidate.startsWith(word))
+        ? 0.7
+        : 0;
+    const coverage = query.reduce((sum, word, position) => sum + matches(word, position, words), 0);
+    const titleWords = new Set(title);
+    const titleCoverage = query.reduce((sum, word, position) => sum + matches(word, position, titleWords), 0);
+    return {
+      song,
+      index,
+      coverage,
+      artistSong: artistSongIds.has(song.id),
+      exactTitle: query.length > 0 && titleKey(song.title) === query.join(' '),
+      titleCoverage,
+      variant: !wantsVariant && VARIANT_PATTERN.test(song.title),
+    };
+  }).sort((a, b) =>
+    b.coverage - a.coverage ||
+    Number(b.artistSong) - Number(a.artistSong) ||
+    Number(b.exactTitle) - Number(a.exactTitle) ||
+    b.titleCoverage - a.titleCoverage ||
+    Number(a.variant) - Number(b.variant) ||
+    b.song.playCount - a.song.playCount ||
+    a.index - b.index
+  ).map((entry) => entry.song);
 }
 
 function matchesArtist(term, artistName) {
   const query = tokens(term);
   const artist = tokens(artistName);
-  return artist.length > 0 && artist.every((word) => query.includes(word));
+  return artist.length > 0 && query.join(' ') === artist.join(' ');
 }
 
 export async function searchSaavn(term, signal, preferences = {}, { limit = 20, fetcher } = {}) {
@@ -183,10 +239,18 @@ export async function searchSaavn(term, signal, preferences = {}, { limit = 20, 
   if (songsResult.status === 'rejected' && artistsResult.status === 'rejected') throw songsResult.reason;
   const found = songsResult.status === 'fulfilled' ? normalizeSaavnSongs(songsResult.value.results, preferences) : [];
   let artistSongs = [];
+  let artistFailure;
   const artist = artistsResult.status === 'fulfilled' ? artistsResult.value.results?.[0] : null;
   if (artist?.id && matchesArtist(query, artist.name)) {
-    const data = await fetchSaavn(`/artists/${encodeURIComponent(artist.id)}/songs`, { sortBy: 'popularity', sortOrder: 'desc', page: '0' }, signal, { fetcher }).catch(() => null);
-    artistSongs = normalizeSaavnSongs(data?.songs, { ...preferences, reason: `Popular full song by ${decodeEntities(artist.name)}.` });
+    try {
+      const data = await fetchSaavn(`/artists/${encodeURIComponent(artist.id)}/songs`, { sortBy: 'popularity', sortOrder: 'desc', page: '0' }, signal, { fetcher });
+      artistSongs = normalizeSaavnSongs(data?.songs, { ...preferences, reason: `Popular full song by ${decodeEntities(artist.name)}.` });
+    } catch (error) {
+      artistFailure = error;
+    }
+  }
+  if (!found.length && !artistSongs.length && (songsResult.status === 'rejected' || artistFailure)) {
+    throw songsResult.status === 'rejected' ? songsResult.reason : artistFailure;
   }
   const artistSongIds = new Set(artistSongs.map((song) => song.id));
   return dedupe(rankSearchResults(query, [...artistSongs, ...found], { artistSongIds })).slice(0, limit);
@@ -221,43 +285,37 @@ const sameLanguage = (playlist, lang) => lang === 'instrumental'
   || playlist.language === lang
   || titleKey(playlist.name).includes(lang);
 
-// Candidate playlists for each language, best match first and rotated by revision.
-async function moodPlaylistCandidates(preferences, revision, signal, fetcher) {
-  const perLanguage = moodPlaylistQueries(preferences);
-  const languages = LANGUAGE_WORDS[preferences.language] || LANGUAGE_WORDS.Surprise;
-  let failure = null;
-  const lists = await Promise.all(perLanguage.map(async (queries, index) => {
-    const results = await Promise.allSettled(queries.map((query) => fetchSaavn('/search/playlists', { query, limit: '10' }, signal, { fetcher })));
-    const seen = new Set();
-    const list = [];
-    results.forEach((result) => {
-      if (result.status === 'rejected') { failure ||= result.reason; return; }
-      (result.value.results || []).forEach((item) => {
-        if (item.url && !seen.has(item.id) && sameLanguage(item, languages[index])) {
-          seen.add(item.id);
-          list.push(item);
-        }
-      });
-    });
-    const shift = list.length ? Math.abs(revision) % list.length : 0;
-    return [...list.slice(shift), ...list.slice(0, shift)];
-  }));
-  if (lists.every((list) => !list.length) && failure) throw failure;
-  return lists;
-}
-
-// Some playlists come back empty, so keep fetching candidates until each
-// language has enough non-empty playlists.
-async function songsFromCandidates(candidates, wanted, signal, options, fetcher) {
+// Search alternative mood words only when earlier playlists cannot fill the mix.
+async function songsForLanguage(queries, lang, wanted, revision, signal, options, fetcher) {
   const groups = [];
+  const seen = new Set();
   let failure = null;
-  for (let start = 0; start < candidates.length && groups.length < wanted && start < 6; start += wanted) {
-    const batch = candidates.slice(start, start + wanted);
-    const results = await Promise.allSettled(batch.map((playlist) => playlistSongs(playlist, signal, options, fetcher)));
-    results.forEach((result) => {
-      if (result.status === 'rejected') failure ||= result.reason;
-      else if (result.value.length && groups.length < wanted) groups.push(result.value);
-    });
+  let checked = 0;
+  for (const query of queries) {
+    if (groups.length >= wanted || checked >= 6) break;
+    let data;
+    try {
+      data = await fetchSaavn('/search/playlists', { query, limit: '10' }, signal, { fetcher });
+    } catch (error) {
+      failure ||= error;
+      if (error.status === 429 || signal?.aborted) break;
+      continue;
+    }
+    const candidates = (data.results || []).filter((item) => item.url && !seen.has(item.id) && sameLanguage(item, lang));
+    const shift = candidates.length ? Math.abs(revision) % candidates.length : 0;
+    for (const playlist of [...candidates.slice(shift), ...candidates.slice(0, shift)]) {
+      if (groups.length >= wanted || checked >= 6) break;
+      if (seen.has(playlist.id)) continue;
+      seen.add(playlist.id);
+      checked += 1;
+      try {
+        const songs = await playlistSongs(playlist, signal, options, fetcher);
+        if (songs.length) groups.push(songs);
+      } catch (error) {
+        failure ||= error;
+        if (error.status === 429 || signal?.aborted) return { groups, failure };
+      }
+    }
   }
   return { groups, failure };
 }
@@ -276,11 +334,11 @@ async function moodSearchSongs(preferences, lang, revision, signal, options, fet
 }
 
 async function moodPlaylistSongs(preferences, revision, signal, fetcher, options) {
-  const lists = await moodPlaylistCandidates(preferences, revision, signal, fetcher);
+  const lists = moodPlaylistQueries(preferences);
   const languages = LANGUAGE_WORDS[preferences.language] || LANGUAGE_WORDS.Surprise;
   const wanted = lists.length > 1 ? 1 : 2;
-  const results = await Promise.all(lists.map(async (list, index) => {
-    const result = await songsFromCandidates(list, wanted, signal, options, fetcher);
+  const results = await Promise.all(lists.map(async (queries, index) => {
+    const result = await songsForLanguage(queries, languages[index], wanted, revision, signal, options, fetcher);
     if (result.groups.flat().length >= MIN_PLAYLIST_SONGS) return result;
     try {
       const extra = await moodSearchSongs(preferences, languages[index], revision, signal, options, fetcher);

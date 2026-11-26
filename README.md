@@ -20,9 +20,10 @@ MoodTune plays **full songs only — no 30-second previews**, and needs no API k
   [jiosaavn-api](https://github.com/sumitkolhe/jiosaavn-api) project's public
   instance (`src/saavn.js`). It returns direct AAC streams that play in MoodTune's
   own audio player, so every result can be played in full: no embeds, no ads.
-  - Search ranks how much of your query matches the title/artist, then popularity;
-    karaoke, covers and remixes sink unless you ask for them. Artist searches lead
-    with that artist's most popular songs.
+  - Search prioritizes complete title, artist and album matches over popularity,
+    including partial final words while typing. Karaoke, covers and remixes sink
+    unless you ask for them. Exact artist searches lead with that artist's popular
+    songs without crowding out a specific song-and-artist query.
   - Made for Your Mood picks JioSaavn mood playlists for your mood, goal and
     language (e.g. "hindi romantic", "instrumental chill"); "Find a fresh mix"
     rotates playlists. Empty or other-language playlists are skipped, and languages
@@ -40,6 +41,11 @@ MoodTune plays **full songs only — no 30-second previews**, and needs no API k
 Caveats: the JioSaavn catalog is strongest for Indian music; some international label
 catalogs (e.g. Ed Sheeran) are missing, so only covers show for those. The public
 jiosaavn-api instance is community-run and can be down; Audius results still show.
+Playlist searches try alternative mood words only as needed. When the service
+returns HTTP 429, the app respects `Retry-After` if available, or waits 60 seconds
+before new requests; cached results remain usable. Browsers may hide the status
+when the response lacks CORS headers, so network failures also trigger a short pause.
+The app cannot override the provider's rate limit, which may last longer.
 The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Firefox.
 
 ## Live discovery
