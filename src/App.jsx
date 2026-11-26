@@ -8,7 +8,6 @@ import { addSearchTerm, readSearchHistory, SEARCH_HISTORY_KEY } from './searchHi
 import { planHistoryUpdate } from './appHistory.js';
 import VolumeControl, { VolumeIcon } from './VolumeControl.jsx';
 import { canSetVolume, MOOD_ACCENTS, readVolume, saveVolume, setLevel, toGain, toggleMute, VOLUME_STEP } from './volume.js';
-import TargetCursor from './components/reactbits/TargetCursor.jsx';
 import ClickSpark from './components/reactbits/ClickSpark.jsx';
 import Magnet from './components/reactbits/Magnet.jsx';
 import TiltedCard from './components/reactbits/TiltedCard.jsx';
@@ -1519,7 +1518,6 @@ export default function App() {
       sparkColor={MOOD_SPARK_COLORS[currentMood] || ['#fbbf24', '#f43f5e', '#c084fc', '#38bdf8']}
       className="min-h-screen bg-slate-950 text-white font-sans selection:bg-rose-500 selection:text-white relative overflow-x-hidden flex flex-col items-center"
     >
-      <TargetCursor targetSelector="button, a, input, [role='button'], .cursor-target, .mood-tile, .taste-card, .quiz-option" />
       <audio
         ref={audioRef}
         preload="metadata"
