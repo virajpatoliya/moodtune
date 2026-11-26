@@ -127,6 +127,19 @@ test('JioSaavn rate limits are shown while Audius provides a fallback', async ({
   expect(saavnRequests).toBe(initialRequests);
 });
 
+test('search explains when JioSaavn is unavailable and Audius has no match', async ({ page }) => {
+  await page.route('https://saavn.sumit.co/api/**', (route) => route.fulfill({
+    status: 429,
+    headers: { 'access-control-allow-origin': '*', 'retry-after': '60' },
+  }));
+  await page.getByRole('button', { name: 'Search songs or artists from anywhere' }).click();
+  await page.getByPlaceholder('What do you want to hear?').fill('aavel mankho su');
+  const alert = page.getByRole('dialog').getByRole('alert');
+  await expect(alert).toContainText('HTTP 429');
+  await expect(alert).toContainText('No matching songs were found on Audius.');
+  await expect(alert.getByRole('button', { name: 'Try again' })).toBeVisible();
+});
+
 test('search playback stays accessible and song progress can be dragged', async ({ page }, testInfo) => {
   await page.unrouteAll();
   await useFakeMusic(page, { audioSeconds: 30 });

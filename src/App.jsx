@@ -899,10 +899,14 @@ export default function App() {
         const openSongsFound = open.status === 'fulfilled' ? open.value.slice(0, fullSongs.length ? 6 : 12) : [];
         if (primary.status === 'rejected') console.error('JioSaavn search failed.', primary.reason);
         if (open.status === 'rejected') console.error('Open music search failed.', open.reason);
-        if (primary.status === 'rejected' && open.status === 'rejected') throw primary.reason;
+        if (primary.status === 'rejected' && open.status === 'rejected') {
+          throw new Error(`${primary.reason.message} Audius search is also unavailable.`, { cause: primary.reason });
+        }
         setLiveSearchResults(fullSongs);
         setOpenSearchResults(openSongsFound);
-        if (primary.status === 'rejected') setSearchError(primary.reason.message);
+        if (primary.status === 'rejected') {
+          setSearchError(`${primary.reason.message}${openSongsFound.length ? '' : ' No matching songs were found on Audius.'}`);
+        }
       } catch (e) {
         if (isCancelled) return;
         setSearchError(e.message);

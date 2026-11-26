@@ -135,7 +135,7 @@ function retryDelay(response) {
 
 function unreachableError(cause) {
   const seconds = Math.max(1, Math.ceil((unreachableUntil - Date.now()) / 1000));
-  return new Error(`${BUSY_MESSAGE} JioSaavn could not be reached; try again in about ${seconds} seconds.`, cause ? { cause } : undefined);
+  return new Error(`${BUSY_MESSAGE} JioSaavn could not be reached; try again in about ${seconds} seconds. The service may need longer.`, cause ? { cause } : undefined);
 }
 
 export async function fetchSaavn(path, params = {}, signal, { fetcher = fetch } = {}) {
