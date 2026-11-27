@@ -81,14 +81,27 @@ const json = (body) => ({ status: 200, contentType: 'application/json', headers:
 
 // Route every non-local request: known music APIs get fake data, everything else is blocked
 // (fonts and other third parties fall back gracefully, and nothing leaks out of the test).
-export async function useFakeMusic(page) {
-  const audio = silentWav();
+export async function useFakeMusic(page, { audioSeconds = 1 } = {}) {
+  const audio = silentWav(audioSeconds);
   await page.route((url) => url.hostname !== 'localhost', (route) => {
     const url = new URL(route.request().url());
     if (url.hostname === 'saavn.sumit.co') return route.fulfill(json({ success: true, data: saavnResponse(url) }));
     if (url.hostname === 'api.audius.co') return route.fulfill(json({ data: [] }));
     if (url.hostname === 'itunes.apple.com') return route.fulfill(json({ resultCount: 0, results: [] }));
-    if (url.hostname === 'aac.saavncdn.com') return route.fulfill({ status: 200, contentType: 'audio/wav', body: audio });
+    if (url.hostname === 'aac.saavncdn.com') {
+      const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range || '');
+      if (range) {
+        const start = Number(range[1]);
+        const end = range[2] ? Math.min(Number(range[2]), audio.length - 1) : audio.length - 1;
+        return route.fulfill({
+          status: 206,
+          contentType: 'audio/wav',
+          headers: { 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${audio.length}`, 'access-control-allow-origin': '*' },
+          body: audio.subarray(start, end + 1),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: 'audio/wav', headers: { 'accept-ranges': 'bytes', 'access-control-allow-origin': '*' }, body: audio });
+    }
     if (url.hostname === 'c.saavncdn.com') return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL_PNG });
     return route.abort();
   });

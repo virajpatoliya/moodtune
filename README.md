@@ -20,9 +20,10 @@ MoodTune plays **full songs only — no 30-second previews**, and needs no API k
   [jiosaavn-api](https://github.com/sumitkolhe/jiosaavn-api) project's public
   instance (`src/saavn.js`). It returns direct AAC streams that play in MoodTune's
   own audio player, so every result can be played in full: no embeds, no ads.
-  - Search ranks how much of your query matches the title/artist, then popularity;
-    karaoke, covers and remixes sink unless you ask for them. Artist searches lead
-    with that artist's most popular songs.
+  - Search prioritizes complete title, artist and album matches over popularity,
+    including partial final words while typing. Karaoke, covers and remixes sink
+    unless you ask for them. Exact artist searches lead with that artist's popular
+    songs without crowding out a specific song-and-artist query.
   - Made for Your Mood picks JioSaavn mood playlists for your mood, goal and
     language (e.g. "hindi romantic", "instrumental chill"); "Find a fresh mix"
     rotates playlists. Empty or other-language playlists are skipped, and languages
@@ -40,6 +41,11 @@ MoodTune plays **full songs only — no 30-second previews**, and needs no API k
 Caveats: the JioSaavn catalog is strongest for Indian music; some international label
 catalogs (e.g. Ed Sheeran) are missing, so only covers show for those. The public
 jiosaavn-api instance is community-run and can be down; Audius results still show.
+Playlist searches try alternative mood words only as needed. When the service
+returns HTTP 429, the app respects `Retry-After` if available, or waits 60 seconds
+before new requests; cached results remain usable. Browsers may hide the status
+when the response lacks CORS headers, so network failures also trigger a short pause.
+The app cannot override the provider's rate limit, which may last longer.
 The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Firefox.
 
 ## Live discovery
@@ -121,6 +127,9 @@ The VS Code built-in browser cannot decode AAC; use Chrome, Edge, Safari or Fire
 - Each result has a separate left Play/Pause button that plays the full song without
   leaving search. Tapping the artwork, title, or rest of the result opens the full player
   and starts (or resumes) that song, rather than toggling it off.
+  At widths of 768px and above, search also shows the current song's playback controls
+  and a seek bar beneath its result. The mini and full players support dragging or
+  using the keyboard to seek once track metadata has loaded.
 - Selecting a song from any surface starts song radio that aims for 15–20
   upcoming full songs, filled in priority order: closest matches to the playing
   song first, then other songs by its artists, then songs in its genre, then the
